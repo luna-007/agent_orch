@@ -38,4 +38,42 @@
             "required": ["type"]
         }
     }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "fetch_web_content",
+        "description": "Used to access the Internet and get raw text details from a webpage.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url" : {
+                    "type": "string",
+                    "description": "The absolute HTTP or HTTPS URL of the webpage to fetch (e.g., https://en.wikipedia.org)"
+                }
+            },
+            "required": ["url"]
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "search_local_files",
+        "description": "Used to access the local file system of the device and move through locations",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "directory" : {
+                    "type": "string",
+                    "description": "The absolute directory path which contains files or there could be directories as well, which can further be storing files"
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "This is the keyword we are searching for and have to find the match"
+                }
+            },
+            "required": ["directory", "keyword"]
+        }
+    }
 }]

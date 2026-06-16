@@ -33,3 +33,26 @@ class Message(BaseModel):
     content: str
     tool_name:  Optional[str] = None
     tool_calls: Optional[list] = None
+    
+class WebQueryInput(BaseModel):
+    url: str = Field(
+        description="This is to be used to browse or access the Internet"
+    )
+    
+class WebQueryOutput(BaseModel):
+    url: str
+    title: str
+    content: str
+    
+class SearchQueryInput(BaseModel):
+    directory: str = Field(
+        description="This is for providing the directory path when searching"
+    )
+    keyword: str = Field(
+        description="This is for storing the providing the keyword we are to search for"
+    )
+    
+class SearchQueryOutput(BaseModel):
+    directory: str
+    keyword: str
+    matches: list[str]
