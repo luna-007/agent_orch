@@ -1,0 +1,41 @@
+[{
+    "type": "function",
+    "function": {
+        "name": "get_disk_usage",
+        "description": "Used to calculate the total, used and free space of the disk",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "type": {                    
+                    "type": "string",
+                    "description": "The specific Storage type to retreive",
+                    "enum": ["Total", "Used", "Free"]
+                }
+            },
+            "required": ["type"]
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "get_time",
+        "description": "Used to get the current time, date, timezone and combined date and time",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "type" : {
+                    "type": "string",
+                    "description": "The specific time or date or timezone or combined data to retreive",
+                    "enum": ["date", "time","timezone","both"]
+                },
+                "time_zone": {
+                    "type": "string",
+                    "description": "This is for updating the timezone data like Asia/Kolkata, America/New_York or Europe/London"
+
+                }
+            },
+            "required": ["type"]
+        }
+    }
+}]
