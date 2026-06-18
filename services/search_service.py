@@ -26,3 +26,20 @@ def search_local_files(directory: str, keyword: str):
         "keyword": keyword,
         "matches": matches
     }
+    
+def list_directory_contents(directory: str):
+    try:
+        directories = [d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
+        files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        return {
+            "directory": directory,
+            "directories": directories,
+            "files": files
+        }
+    except OSError as e:
+        return {
+            "directory": directory,
+            "directories": [],
+            "files": [],
+            "error": str(e)
+        }

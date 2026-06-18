@@ -1,10 +1,10 @@
 import json, sys
 from schemas.tool_schemas import DiskQueryInput, DiskQueryOutput, TimeQueryInput, TimeQueryOutput, WebQueryInput, WebQueryOutput
-from schemas.tool_schemas import SearchQueryInput, SearchQueryOutput
+from schemas.tool_schemas import SearchQueryInput, SearchQueryOutput, ListDirectoryInput, ListDirectoryOutput
 from services.disk_service import get_disk_usage
 from services.time_service import get_time
 from services.web_service import fetch_web_content
-from services.search_service import search_local_files
+from services.search_service import search_local_files, list_directory_contents
 from mcp.server.mcpserver import MCPServer
 
 mcp = MCPServer("SystemMonitor")
@@ -65,6 +65,21 @@ def search_local_files_handler(query: SearchQueryInput):
     
     return validate_data.matches
 
+@mcp.tool()
+def list_directory_contents_handler(query: ListDirectoryInput):
+    """Used to get the directories and files inside a directory"""
+    sys.stderr.write(f"\n[Executing Tool: search_local_files] for: '{query.directory}'\n")
+    
+    raw_data = list_directory_contents(query.directory)
+    validate_data = ListDirectoryOutput(
+        directory = raw_data.get('directory'),
+        directories = raw_data.get('directories'),
+        files = raw_data.get('files'),
+        error = raw_data.get('error')
+    )
+    
+    return validate_data.files
+
 with open("schemas/tools.json") as f:
     tools_list = json.load(f)
 
@@ -72,6 +87,7 @@ disk_tool_schema = tools_list[0]
 time_tool_schema = tools_list[1]
 web_tool_schema = tools_list[2]
 local_search_tool_schema = tools_list[3]
+list_directory_tool_schema = tools_list[4]
 
 available_tools = {
     "get_disk_usage": {
@@ -93,6 +109,11 @@ available_tools = {
         "func": search_local_files_handler,
         "input_model": SearchQueryInput,
         "schema": local_search_tool_schema
+    },
+    "list_directory_contents": {
+        "func": list_directory_contents_handler,
+        "input_model": ListDirectoryInput,
+        "schema": list_directory_tool_schema
     }
 }
 

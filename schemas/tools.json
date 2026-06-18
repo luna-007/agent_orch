@@ -76,4 +76,21 @@
             "required": ["directory", "keyword"]
         }
     }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "list_directory_contents",
+        "description": "Used to get the files and directories inside a directory",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "directory" : {
+                    "type": "string",
+                    "description": "The absolute directory path which contains files and directories as well, which can further be storing files"
+                }
+            },
+            "required": ["directory"]
+        }
+    }
 }]

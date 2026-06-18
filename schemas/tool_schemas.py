@@ -56,3 +56,14 @@ class SearchQueryOutput(BaseModel):
     directory: str
     keyword: str
     matches: list[str]
+    
+class ListDirectoryInput(BaseModel):
+    directory: str = Field(
+        description="This is used to provide the path of the directory"
+    )
+    
+class ListDirectoryOutput(BaseModel):
+    directory: Optional[str] = None
+    directories: Optional[list[str]] = None
+    files: Optional[list[str]] = None
+    error: Optional[str] = None
