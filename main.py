@@ -3,8 +3,19 @@ import json
 from schemas.tool_schemas import Message
 from registry import available_tools
 from config import settings
+from services.memory_service import initialize_db, save_message_to_db
+from cli import handle_startup_menu
+from services.ai_services import generate_session_title
+from services.memory_service import update_session_name
 
 messages = []
+initialize_db()
+session_id, messages = handle_startup_menu()
+is_new_session = len(messages) == 0
+
+def append_and_save(message: Message):
+    messages.append(message)
+    save_message_to_db(session_id, message)
 
 api_url = settings.api_url
 model_name = settings.OLLAMA_MODEL
@@ -16,7 +27,7 @@ while True:
         print("Goodbye !")
         break
     
-    messages.append(Message(role='user', content=user_input))
+    append_and_save(Message(role='user', content=user_input))
     
     while True:
 
@@ -49,7 +60,7 @@ while True:
                 tool_calls = message.get("tool_calls", [])
                 
                 if tool_calls:
-                    messages.append(Message(**message)) 
+                    append_and_save(Message(**message)) 
 
                     for tool_call in tool_calls:
                         
@@ -65,15 +76,21 @@ while True:
                             validated_input = input_model(**raw_arguments)
                             tool_output = tool_to_run(validated_input)
                             
-                            messages.append(Message(
+                            append_and_save(Message(
                                 role = "tool",
                                 tool_name = function_name,
                                 content = json.dumps(tool_output)
-                            ))                    
+                            ))      
+                            
                 else:
                     final_response = response_data.get("message", {}).get("content", "")
                     print(f"Response: {final_response.replace('*', '')}")
-                    messages.append(Message(role="assistant", content=final_response))
+                    append_and_save(Message(role="assistant", content=final_response))
+                    if is_new_session:
+                        session_title = generate_session_title(messages[0].content, final_response)
+                        update_session_name(session_id, session_title)
+                        is_new_session = False
+                        break              
                     break                
         else: 
             print(f"Error: {response.status_code}")

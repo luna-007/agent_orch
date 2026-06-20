@@ -27,7 +27,7 @@ class DiskQueryOutput(BaseModel):
     free: str
     
 class Message(BaseModel):
-    role: Literal["user", "assistant", "tool"] = Field(
+    role: Literal["system", "user", "assistant", "tool"] = Field(
         description = "The role being used"
     )
     content: str
@@ -45,11 +45,12 @@ class WebQueryOutput(BaseModel):
     content: str
     
 class SearchQueryInput(BaseModel):
-    directory: str = Field(
-        description="This is for providing the directory path when searching"
+    directory: Optional[str] = Field(
+        default=None,
+        description="The folder path to search, If omitted, defaults to the active current directory"
     )
     keyword: str = Field(
-        description="This is for storing the providing the keyword we are to search for"
+        description="This is the keyword we are searching for"
     )
     
 class SearchQueryOutput(BaseModel):
@@ -58,8 +59,9 @@ class SearchQueryOutput(BaseModel):
     matches: list[str]
     
 class ListDirectoryInput(BaseModel):
-    directory: str = Field(
-        description="This is used to provide the path of the directory"
+    directory: Optional[str] = Field(
+        default=None,
+        description="The folder path to search, If omitted, defaults to the active current directory"
     )
     
 class ListDirectoryOutput(BaseModel):
@@ -67,3 +69,19 @@ class ListDirectoryOutput(BaseModel):
     directories: Optional[list[str]] = None
     files: Optional[list[str]] = None
     error: Optional[str] = None
+    
+class ChangeDirectoryInput(BaseModel):
+    path: str = Field(
+        description="This is for storing the target path to move to"
+    )
+    
+class ChangeDirectoryOutput(BaseModel):
+    current_directory: str
+    error: Optional[str] = None
+    
+class GetDirectoryInput(BaseModel):
+    pass
+
+class GetDirectoryOutput(BaseModel):
+    current_directory: str
+    

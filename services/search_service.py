@@ -19,7 +19,7 @@ def search_local_files(directory: str, keyword: str):
                         clean_line = line.strip()
                         if keyword.lower() in clean_line.lower():
                             matches.append(f"{file_path}: {line_num}: {clean_line}")
-            except (UnicodeDecodeError, PermissionError) as e:
+            except Exception as e:
                 continue
     return {
         "directory": directory,
@@ -43,3 +43,11 @@ def list_directory_contents(directory: str):
             "files": [],
             "error": str(e)
         }
+        
+def resolve_and_validate_path(current_dir: str, target_path: str):
+    new_path = os.path.abspath(os.path.join(current_dir, target_path))
+    if not os.path.exists(new_path):
+        raise FileNotFoundError(f"Path '{target_path}' does not exist.")
+    if not os.path.isdir(new_path):
+        raise NotADirectoryError(f"Path '{target_path} is not a directory.'")
+    return new_path

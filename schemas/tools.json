@@ -89,8 +89,35 @@
                     "type": "string",
                     "description": "The absolute directory path which contains files and directories as well, which can further be storing files"
                 }
+            }
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "change_directory",
+        "description": "Changes the active current working directory of this session (cd).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path" : {
+                    "type": "string",
+                    "description": "The folder name, relative path (e.g., '..', 'services'), or absolute path to move to"
+                }
             },
-            "required": ["directory"]
+            "required": ["path"]
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "get_current_directory",
+        "description": "Prints the active, current working directory path of the session(pwd)",
+        "parameters": {
+            "type": "object",
+            "properties": {}
         }
     }
 }]
