@@ -2,7 +2,7 @@
 
 A lightweight LLM agent orchestration framework built from first principles. Agent-Orch exposes the core mechanics of how modern AI agents reason, call tools, validate inputs, and chain actions — without the abstractions that frameworks like LangChain, CrewAI, or AutoGen layer on top.
 
-It runs against a **local Ollama model** (no cloud API required) and supports two modes: an interactive CLI agent and a Model Context Protocol (MCP) server.
+It runs against a **local Ollama model** or **Google Gemini** (no mandatory cloud dependency) and supports two modes: an interactive CLI agent and a Model Context Protocol (MCP) server.
 
 ---
 
@@ -13,7 +13,7 @@ Most agent frameworks make building AI applications easy, but they hide the deta
 - How tool calling is structured and dispatched
 - How inputs and outputs are validated before and after execution
 - How reasoning loops are orchestrated across multiple turns
-- How external tools are described and exposed to language models
+- How a pluggable LLM client interface lets you swap providers without changing agent logic
 - How MCP connects models to real-world capabilities
 
 Agent-Orch is built to answer those questions through readable, minimal code. Every component — orchestration loop, tool registration, schema validation, session persistence — is intentionally visible and easy to follow.
@@ -22,7 +22,9 @@ Agent-Orch is built to answer those questions through readable, minimal code. Ev
 
 ## Features
 
-**Autonomous ReAct Loop** — The agent analyzes requests, selects tools, executes them, evaluates results, and chains further tool calls as needed, without human intervention between steps.
+**Autonomous ReAct Loop** — The agent analyzes requests, selects tools, executes them, evaluates results, and chains further tool calls as needed, without human intervention between steps. A configurable `max_iter` cap (default: 5) prevents runaway loops.
+
+**Pluggable LLM Clients** — A `LLMClient` Protocol in `schemas/llm_schema.py` decouples the orchestration loop from any specific provider. `OllamaClient` is included out of the box; Gemini is pre-configured in `config.py` and ready to wire up.
 
 **Dual Execution Modes** — Runs either as a standalone CLI agent or as a fully compliant MCP server that integrates with Claude Code, Cursor, or any MCP-compatible client.
 
@@ -45,13 +47,19 @@ Agent-Orch is built to answer those questions through readable, minimal code. Ev
               ▼                                                  ▼
 ┌─────────────────────────────┐                    ┌────────────────────────┐
 │   main.py                   │                    │   registry.py          │
-│   Stateful ReAct Loop       │                    │   MCP Server           │
+│   run_turn() ReAct Loop     │                    │   MCP Server           │
 │   Session management        │                    └────────────┬───────────┘
 └─────────────┬───────────────┘                                 │
               │                                                 │
               └──────────────────┬──────────────────────────────┘
                                  │
                                  ▼
+                   ┌─────────────────────────────┐
+                   │   LLMClient (Protocol)       │
+                   │   OllamaClient               │
+                   │   GeminiClient (pluggable)   │
+                   └─────────────┬───────────────┘
+                                 │
                    ┌─────────────────────────────┐
                    │   registry.py               │
                    │   Tool dispatch             │
@@ -70,22 +78,26 @@ Agent-Orch is built to answer those questions through readable, minimal code. Ev
 
 ```text
 agent_orch/
-├── main.py               # Interactive CLI and ReAct orchestration loop
-├── registry.py           # Tool registration, MCP server, Pydantic validation
-├── cli.py                # Terminal session picker (new / resume)
-├── config.py             # Settings loaded from .env
+├── main.py                    # Interactive CLI and ReAct orchestration loop
+├── registry.py                # Tool registration, MCP server, Pydantic validation
+├── cli.py                     # Terminal session picker (new / resume)
+├── config.py                  # Settings loaded from .env (Ollama + Gemini)
+│
+├── clients/
+│   └── ollama_client.py       # OllamaClient — implements LLMClient Protocol
 │
 ├── schemas/
-│   ├── tool_schemas.py   # Pydantic DTOs for all tools and the Message model
-│   └── tools.json        # JSON tool schemas passed to Ollama's tool-calling API
+│   ├── llm_schema.py          # LLMClient Protocol, LLMResponse, ToolCall DTOs
+│   ├── tool_schemas.py        # Pydantic DTOs for all tools and the Message model
+│   └── tools.json             # JSON tool schemas passed to Ollama's tool-calling API
 │
 └── services/
-    ├── ai_services.py     # Generates session titles via the LLM
-    ├── disk_service.py    # Disk usage (shutil)
-    ├── memory_service.py  # SQLite session and message persistence
-    ├── search_service.py  # File search, directory listing, path resolution
-    ├── time_service.py    # Timezone-aware datetime
-    └── web_service.py     # Web page fetcher (raw text extraction)
+    ├── ai_services.py         # Generates session titles via the LLM
+    ├── disk_service.py        # Disk usage (shutil)
+    ├── memory_service.py      # SQLite session and message persistence
+    ├── search_service.py      # File search, directory listing, path resolution
+    ├── time_service.py        # Timezone-aware datetime
+    └── web_service.py         # Web page fetcher (raw text extraction)
 ```
 
 ---
@@ -106,15 +118,32 @@ agent_orch/
 
 ## How the ReAct Loop Works
 
-Each turn follows this cycle:
+The loop lives in `run_turn()` in `main.py` and follows this cycle each turn:
 
 1. User input is saved to SQLite and appended to the in-memory message history
-2. The full history plus all tool schemas is sent to Ollama's `/api/chat`
-3. **If the model returns tool calls:** each tool is dispatched, inputs are validated by Pydantic, results are appended as `tool` role messages, and the loop continues
-4. **If the model returns a final response:** it is printed, saved, and the loop waits for the next user message
-5. On the first turn of a new session, the model auto-generates a short title based on the exchange
+2. The full history plus all tool schemas is sent to the LLM client
+3. **If the model returns tool calls:** each tool is dispatched via `registry.available_tools`, inputs are validated by Pydantic, results are appended as `tool` role messages, and the loop continues
+4. **If the model returns a final response:** it is printed, saved, and the outer loop waits for the next user message
+5. If the iteration count reaches `max_iter` (default: 5), a `RuntimeError` is raised to prevent infinite loops
+6. On the first turn of a new session, the model auto-generates a short title based on the exchange
 
-There is no step limit — the agent chains tool calls until it reaches a final answer or the model stops requesting tools.
+```python
+def run_turn(messages, llm, tools, on_save, max_iter=5) -> str:
+    iter = 0
+    while True:
+        iter += 1
+        if iter >= max_iter:
+            raise RuntimeError("Max Iterations reached")
+
+        response = llm.chat(messages, tools)
+
+        if response.tool_calls:
+            # dispatch tools, append results, continue loop
+            ...
+        else:
+            # final answer — save and return
+            return response.content
+```
 
 ---
 
@@ -143,8 +172,14 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```env
+# Ollama (local, no API key required)
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5-coder:7b-instruct-q3_K_M
+
+# Gemini (optional — for cloud-based inference)
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=your_key_here
 ```
 
 > For machines with limited VRAM (~6 GB), a 7B–8B model at 3-bit quantization is recommended. Claude Code introduces significant system prompt overhead, so smaller quantizations help keep things running smoothly.
@@ -190,7 +225,7 @@ then search inside it for the word 'Message'.
 [Executing Tool: list_directory_contents]
 [Executing Tool: search_local_files]
 
-Response:
+Final Response:
 I found the schemas directory and identified the file 'tool_schemas.py'.
 The term 'Message' appears on line 15 as a Pydantic model definition.
 ```
@@ -232,9 +267,37 @@ All registered tools are immediately available to Claude via the MCP protocol.
 
 ---
 
+## Adding a New LLM Client
+
+The `LLMClient` Protocol makes it straightforward to plug in any provider:
+
+```python
+# clients/gemini_client.py
+from schemas.llm_schema import LLMClient, LLMResponse, ToolCall
+from schemas.tool_schemas import Message
+from config import settings
+
+class GeminiClient(LLMClient):
+    def chat(self, messages: list[Message], tools: list[dict] | None = None) -> LLMResponse:
+        # call the Gemini API using settings.gemini_url
+        ...
+        return LLMResponse(content=text, tool_calls=tool_call_list)
+```
+
+Then swap it in `main.py`:
+
+```python
+from clients.gemini_client import GeminiClient
+llm = GeminiClient()
+```
+
+No changes to the loop, registry, or tools required.
+
+---
+
 ## Adding a New Tool
 
-### Step 1 — Write the service function
+**Step 1 — Write the service function**
 
 ```python
 # services/my_service.py
@@ -242,12 +305,10 @@ def fetch_data(url: str) -> dict:
     return {"url": url, "data": "..."}
 ```
 
-### Step 2 — Define Pydantic DTOs
+**Step 2 — Define Pydantic DTOs**
 
 ```python
 # schemas/tool_schemas.py
-from pydantic import BaseModel, Field
-
 class MyToolInput(BaseModel):
     url: str = Field(description="The target URL")
 
@@ -256,12 +317,9 @@ class MyToolOutput(BaseModel):
     data: str
 ```
 
-### Step 3 — Register the tool in registry.py
+**Step 3 — Register the handler in registry.py**
 
 ```python
-from services.my_service import fetch_data
-from schemas.tool_schemas import MyToolInput, MyToolOutput
-
 @mcp.tool()
 def fetch_data_handler(query: MyToolInput) -> str:
     raw = fetch_data(url=query.url)
@@ -269,7 +327,7 @@ def fetch_data_handler(query: MyToolInput) -> str:
     return validated.data
 ```
 
-### Step 4 — Add the JSON schema to schemas/tools.json
+**Step 4 — Add the JSON schema to schemas/tools.json**
 
 ```json
 {
@@ -280,10 +338,7 @@ def fetch_data_handler(query: MyToolInput) -> str:
         "parameters": {
             "type": "object",
             "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The target URL"
-                }
+                "url": { "type": "string", "description": "The target URL" }
             },
             "required": ["url"]
         }
@@ -291,7 +346,7 @@ def fetch_data_handler(query: MyToolInput) -> str:
 }
 ```
 
-### Step 5 — Register in the available_tools dict
+**Step 5 — Add to the available_tools dict**
 
 ```python
 available_tools["fetch_data"] = {
@@ -307,15 +362,17 @@ The tool is now available in both the CLI agent and the MCP server.
 
 ## Planned Improvements
 
+**Gemini client implementation** — `config.py` already has Gemini support wired up; a `GeminiClient` implementing the `LLMClient` Protocol is the natural next step.
+
 **Unified tool registration** — A single decorator that drives both the `available_tools` dict and the MCP server, eliminating the current duplication.
 
-**System prompt support** — Expose a configurable system prompt in the ReAct loop for consistent agent persona and instructions.
+**System prompt support** — Expose a configurable system prompt in `run_turn()` for consistent agent persona and instructions.
 
 **Docker packaging** — A lightweight Docker image for the MCP server to ensure reproducible deployments without local Python setup.
 
-**JIT RAG web reader** — Chunking and vector retrieval (ChromaDB or LanceDB) for large web pages, instead of hard-truncating at 5000 characters.
+**JIT RAG web reader** — Chunking and vector retrieval (ChromaDB or LanceDB) for large web pages, instead of hard-truncating fetched content.
 
-**Graceful tool error recovery** — Catch tool failures mid-loop and allow the agent to retry or take an alternative path rather than exiting.
+**Graceful tool error recovery** — Catch tool failures mid-loop and allow the agent to retry or take an alternative path rather than raising an exception.
 
 ---
 
