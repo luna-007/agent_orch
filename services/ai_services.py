@@ -3,7 +3,7 @@ from config import settings
 
 def generate_session_title(user_prompt: str, assistant_response: str) -> str:
     
-    target_url = settings.api_url
+    target_url = settings.ollama_url
     target_model = settings.OLLAMA_MODEL
     
     title_prompt = (
