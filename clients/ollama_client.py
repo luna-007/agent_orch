@@ -1,5 +1,4 @@
-import requests
-import json, httpx
+import httpx
 from schemas.tool_schemas import Message
 from schemas.llm_schema import LLMResponse, LLMClient,  ToolCall
 from config import settings
@@ -28,7 +27,7 @@ class OllamaClient(LLMClient):
             
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(settings.ollama_url, json=payload)
-            response_data = response.json()
+        response_data = response.json()
         
         message_data = response_data.get("message", {})
         

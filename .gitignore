@@ -21,3 +21,9 @@ yarn-error.log*
 # Local Files
 .vscode/
 __pycache__/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/

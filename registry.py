@@ -126,7 +126,7 @@ async def get_current_directory_handler(query: GetDirectoryInput):
     return validated_output.current_directory
 
 @mcp.tool()
-def read_local_file_handler(query: ReadFileInput):
+async def read_local_file_handler(query: ReadFileInput):
     """To Read the files"""
     sys.stderr.write(f"\n[Executing Tool: read_local_files to read the file at {query.file_path}] '\n")
     

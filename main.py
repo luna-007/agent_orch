@@ -12,7 +12,7 @@ import asyncio
 from clients.ollama_client import OllamaClient
 
 llm = OllamaClient()
-    
+
 flat_tools = [config["schema"] for config in available_tools.values()]
 
 async def run_turn(
@@ -41,7 +41,7 @@ async def run_turn(
             async def execute_tools(tool_call):
                 tool_config = available_tools[tool_call.name]
                 validated_input = tool_config["input_model"](**tool_call.arguments)
-                result = tool_config["func"](validated_input)
+                result = await tool_config["func"](validated_input)
                 return tool_call.name, result
             
             results = await asyncio.gather(
@@ -91,7 +91,7 @@ async def agent_loop(session_id: str, messages: list):
             on_save=on_save_callback
         )
         
-        print(f"\nFinal Reponse: {final_response.replace('*', '')}")
+        print(f"\nResponse: {final_response.replace('*', '')}")
         
         if is_new_session:
             session_title = generate_session_title(messages[0].content, final_response)
