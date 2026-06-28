@@ -35,7 +35,11 @@ class Settings(BaseSettings):
     
     DATABASE_PATH: str = "agent_memory.db"
     
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        extra='ignore'
+        )
     
     @model_validator(mode="after")
     def validate_required_settings(self) -> "Settings":

@@ -14,6 +14,8 @@ logger = logging.getLogger("agent_orch.registry")
 mcp = MCPServer("SystemMonitor")
 current_working_directory = os.path.dirname(os.path.abspath(__file__))
 
+
+
 @mcp.tool()
 async def get_disk_usage_handler(query: DiskQueryInput):
     """Used to fetch the storage space utilization of the device"""
@@ -148,58 +150,62 @@ async def read_local_file_handler(query: ReadFileInput):
     
 tools_path = os.path.join(current_working_directory, "schemas", "tools.json")
 
+def get_schema_by_name(tools: list[dict], name: str) -> dict:
+    """
+    Dynamically searches the loaded tools JSON array for a schema matching the tool's name.
+    Raises ValueError on boot if the schema is missing or misspelled in tools.json.
+    """
+    for tool in tools:
+        # standard schema structure: tool["function"]["name"]
+        if tool.get("function", {}).get("name") == name:
+            return tool
+            
+    # Fail-fast on startup if there is a mismatch!
+    raise ValueError(f"❌ CRITICAL CONFIG ERROR: Tool schema for '{name}' was not found in tools.json!")
+
 with open(tools_path) as f:
     tools_list = json.load(f)
-
-disk_tool_schema = tools_list[0]
-time_tool_schema = tools_list[1]
-web_tool_schema = tools_list[2]
-local_search_tool_schema = tools_list[3]
-list_directory_tool_schema = tools_list[4]
-resolve_and_validate_path_schema = tools_list[5]
-get_current_directory_schema = tools_list[6]
-read_file_tool_schema = tools_list[7]
 
 available_tools = {
     "get_disk_usage": {
         "func": get_disk_usage_handler,
         "input_model": DiskQueryInput,
-        "schema": disk_tool_schema
+        "schema": get_schema_by_name(tools_list, "get_disk_usage")
     },
     "get_time": {
         "func": get_time_handler,
         "input_model": TimeQueryInput,
-        "schema": time_tool_schema
+        "schema": get_schema_by_name(tools_list, "get_time")
     },
     "fetch_web_content": {
         "func": fetch_web_content_handler,
         "input_model": WebQueryInput,
-        "schema": web_tool_schema
+        "schema": get_schema_by_name(tools_list, "fetch_web_content")
     },
     "search_local_files": {
         "func": search_local_files_handler,
         "input_model": SearchQueryInput,
-        "schema": local_search_tool_schema
+        "schema": get_schema_by_name(tools_list, "search_local_files")
     },
     "list_directory_contents": {
         "func": list_directory_contents_handler,
         "input_model": ListDirectoryInput,
-        "schema": list_directory_tool_schema
+        "schema": get_schema_by_name(tools_list, "list_directory_contents")
     },
     "change_directory": {
         "func": resolve_and_validate_path_handler,
         "input_model": ChangeDirectoryInput,
-        "schema": resolve_and_validate_path_schema
+        "schema": get_schema_by_name(tools_list, "change_directory")
     },
     "get_current_directory": {
         "func": get_current_directory_handler,
         "input_model": GetDirectoryInput,
-        "schema": get_current_directory_schema
+        "schema": get_schema_by_name(tools_list, "get_current_directory")
     },
     "read_local_file": {
-    "func": read_local_file_handler,
-    "input_model": ReadFileInput,
-    "schema": read_file_tool_schema
+        "func": read_local_file_handler,
+        "input_model": ReadFileInput,
+        "schema": get_schema_by_name(tools_list, "read_local_file")
     }
 }
 

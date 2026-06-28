@@ -12,7 +12,7 @@ class OllamaClient(LLMClient):
         payload = {
             "model": settings.OLLAMA_MODEL,
             "messages": [msg.model_dump() for msg in messages],
-            "think": True,
+            "think": False,
             "stream": False
         }
         if tools:
@@ -27,6 +27,12 @@ class OllamaClient(LLMClient):
             
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(settings.ollama_url, json=payload)
+            
+        if response.status_code != 200:
+            import sys
+            sys.stderr.write(f"\n[Ollama API Error {response.status_code}]: {response.text}\n")
+            return LLMResponse(content=f"Ollama Error: {response.text}", tool_calls=None)
+
         response_data = response.json()
         
         message_data = response_data.get("message", {})

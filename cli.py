@@ -1,14 +1,14 @@
 import os, uuid, sys
 import questionary
-from services.memory_service import get_sessions, load_history_from_db, initialize_db
+from services.memory_service import MemoryService
 
-def handle_startup_menu() -> tuple[str, list]:
+def handle_startup_menu(memory_svc: MemoryService) -> tuple[str, list]:
     """Displays the terminal UI session menu and returns (session_id, loaded_messages)"""
 
-    initialize_db()
+    memory_svc.initialize_db()
     
     try:
-        sessions = get_sessions()
+        sessions = memory_svc.get_sessions()
 
         print("=== Agent Orch Session Manager ===")
         options = [
@@ -45,7 +45,7 @@ def handle_startup_menu() -> tuple[str, list]:
                 selected_idx = int(selected_num) - 1
                 session_id = sessions[selected_idx][0]
                 
-                messages = load_history_from_db(session_id)
+                messages = memory_svc.load_history_from_db(session_id)
                 
                 print("\n📁 Loading past sessions...")
                 return (session_id, messages)

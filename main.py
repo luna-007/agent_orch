@@ -1,14 +1,13 @@
-import json
+from config import settings
+import json, aioconsole
 from schemas.tool_schemas import Message
 from registry import available_tools
-from services.memory_service import save_message_to_db
+from services.memory_service import MemoryService
 from cli import handle_startup_menu
 from services.ai_services import generate_session_title
-from services.memory_service import update_session_name
 from schemas.llm_schema import LLMClient
 from typing import Callable
 import asyncio
-import sys
 import logging
 from clients.ollama_client import OllamaClient
 
@@ -29,8 +28,8 @@ async def run_turn(
         if iter >= max_iter:
             raise RuntimeError("Max Iterations reached")
         
-        max_retries = 3
-        backoff_factor = 2.0
+        max_retries:int = 3
+        backoff_factor:float = 2.0
         
         response = None
         
@@ -92,15 +91,20 @@ async def run_turn(
             messages.append(assistant_msg)
             return response.content
 
-async def agent_loop(session_id: str, messages: list, llm: LLMClient):
+async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService, llm: LLMClient):
     is_new_session = len(messages) == 0
     
     def on_save_callback(msg: Message):
-        save_message_to_db(session_id, msg)
-    
+        memory_svc.save_message_to_db(session_id, msg)
     
     while True:
-        user_input = input("\nyou: ")
+        try:
+            # Non-blocking input wrapper with a 5-minute inactivity timeout!
+            user_input = await asyncio.wait_for(aioconsole.ainput("\nyou: "), timeout=300.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"Session {session_id} has expired")
+            print("\n\n[Session Timeout] Closing session due to 5 minutes of inactivity.")
+            break
         
         if user_input.lower() in ['quit', 'exit']:
             print("Goodbye !")
@@ -121,15 +125,18 @@ async def agent_loop(session_id: str, messages: list, llm: LLMClient):
         
         if is_new_session:
             session_title = generate_session_title(messages[0].content, final_response)
-            update_session_name(session_id, session_title)
+            memory_svc.update_session_name(session_id, session_title)
             is_new_session = False  
             
 def main():
-    session_id, messages = handle_startup_menu()
     
+    memory_svc = MemoryService(settings.DATABASE_PATH)
     llm = OllamaClient()
     
-    asyncio.run(agent_loop(session_id, messages, llm))
+    session_id, messages = handle_startup_menu(memory_svc)
+    
+    
+    asyncio.run(agent_loop(session_id, messages, memory_svc, llm))
     
 if __name__ == "__main__":
     main()
