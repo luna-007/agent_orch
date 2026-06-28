@@ -8,10 +8,11 @@ from services.memory_service import update_session_name
 from schemas.llm_schema import LLMClient
 from typing import Callable
 import asyncio
-
+import sys
+import logging
 from clients.ollama_client import OllamaClient
 
-llm = OllamaClient()
+logger = logging.getLogger("agent_orch.orchestrator")
 
 flat_tools = [config["schema"] for config in available_tools.values()]
 
@@ -20,16 +21,46 @@ async def run_turn(
     llm: LLMClient,
     tools: list[dict],
     on_save: Callable[[Message], None],
-    max_iter: int = 5) -> str :
+    max_iter: int = 10) -> str :
     
     iter = 0
     while True:
         iter += 1
         if iter >= max_iter:
             raise RuntimeError("Max Iterations reached")
-        response = await llm.chat(messages, tools)
+        
+        max_retries = 3
+        backoff_factor = 2.0
+        
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = await llm.chat(messages, tools)
+                if response:
+                    break
+            except Exception as e:
+                if (attempt == max_retries - 1):
+                    raise RuntimeError(f"Connection failed due to {e}")
+                else:
+                    sleep_time = backoff_factor * (2 ** attempt)
+                    logger.warning(f"LLM call failed on attempt {attempt + 1}: {e}. Retrying in {sleep_time}s...")
+                    await asyncio.sleep(sleep_time)
+                    
+        if response is None:
+            raise RuntimeError("Failed to retrieve a valid response from the LLM.")
         
         if response.tool_calls:
+            async def execute_tools(tool_call):
+                tool_config = available_tools[tool_call.name]
+                try:
+                    validated_input = tool_config["input_model"](**tool_call.arguments)
+                    result = await tool_config["func"](validated_input)
+                except Exception as e:
+                    logger.error(f"Failed to execute tool '{tool_call.name}': {e}", exc_info=True)
+                    result = f"Error executing tool '{tool_call.name}': {str(e)}"
+                return tool_call.name, result
+            
             assistant_msg = Message(
                 role="assistant",
                 content=response.content,
@@ -38,11 +69,6 @@ async def run_turn(
             on_save(assistant_msg)
             messages.append(assistant_msg)
             
-            async def execute_tools(tool_call):
-                tool_config = available_tools[tool_call.name]
-                validated_input = tool_config["input_model"](**tool_call.arguments)
-                result = await tool_config["func"](validated_input)
-                return tool_call.name, result
             
             results = await asyncio.gather(
                 *[execute_tools(tc) for tc in response.tool_calls if tc.name in available_tools]
@@ -66,7 +92,7 @@ async def run_turn(
             messages.append(assistant_msg)
             return response.content
 
-async def agent_loop(session_id: str, messages: list):
+async def agent_loop(session_id: str, messages: list, llm: LLMClient):
     is_new_session = len(messages) == 0
     
     def on_save_callback(msg: Message):
@@ -100,7 +126,11 @@ async def agent_loop(session_id: str, messages: list):
             
 def main():
     session_id, messages = handle_startup_menu()
-    asyncio.run(agent_loop(session_id, messages))
+    
+    llm = OllamaClient()
+    
+    asyncio.run(agent_loop(session_id, messages, llm))
     
 if __name__ == "__main__":
     main()
+    

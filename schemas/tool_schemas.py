@@ -54,11 +54,11 @@ class SearchQueryInput(BaseModel):
     )
     
 class SearchQueryOutput(BaseModel):
-    directory: str
-    keyword: str
-    matches: list[str]
-    truncated: bool
-    message: str | None
+    directory: str | None = None
+    keyword: str | None = None
+    matches: list[str] | None = None
+    truncated: bool | None = None
+    message: str | None = None
     
 class ListDirectoryInput(BaseModel):
     directory: Optional[str] = Field(

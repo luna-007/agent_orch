@@ -1,9 +1,11 @@
-import json, sqlite3, uuid
+import json, sqlite3
 from typing import Optional
 from schemas.tool_schemas import Message
+from config import settings
 
 def initialize_db():
-    con = sqlite3.connect('agent_memory.db')
+    con = sqlite3.connect(settings.DATABASE_PATH)
+    con.execute("PRAGMA Journal_mode=WAL")
     cur = con.cursor()
     
     cur.execute("""CREATE TABLE IF NOT EXISTS Message(
@@ -20,7 +22,7 @@ def initialize_db():
     con.close()
     
 def save_message_to_db(session_id: str, message: Message, session_name: Optional[str] = None):
-    con = sqlite3.connect('agent_memory.db')
+    con = sqlite3.connect(settings.DATABASE_PATH)
     cur = con.cursor()
     
     if not session_name:
@@ -49,7 +51,7 @@ def save_message_to_db(session_id: str, message: Message, session_name: Optional
     con.close()
     
 def load_history_from_db(session_id: str) -> list[Message]:
-    con = sqlite3.connect('agent_memory.db')
+    con = sqlite3.connect(settings.DATABASE_PATH)
     cur = con.cursor()
     
     cur.execute("""
@@ -67,7 +69,7 @@ def load_history_from_db(session_id: str) -> list[Message]:
     return history
 
 def get_sessions() -> list[tuple[str, str]]:
-    con = sqlite3.connect('agent_memory.db')
+    con = sqlite3.connect(settings.DATABASE_PATH)
     cur = con.cursor()
     cur.execute("""
                 SELECT session_id, 
@@ -84,7 +86,7 @@ def get_sessions() -> list[tuple[str, str]]:
     return sessions
 
 def update_session_name(session_id: str, session_name: str):
-    con = sqlite3.connect('agent_memory.db')
+    con = sqlite3.connect(settings.DATABASE_PATH)
     cur = con.cursor()
     cur.execute("""
                 UPDATE Message

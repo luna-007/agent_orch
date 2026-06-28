@@ -7,7 +7,9 @@ from services.time_service import get_time
 from services.web_service import fetch_web_content
 from services.search_service import search_local_files, list_directory_contents, resolve_and_validate_path, read_local_file
 from mcp.server.mcpserver import MCPServer
-import asyncio
+import asyncio, logging
+
+logger = logging.getLogger("agent_orch.registry")
 
 mcp = MCPServer("SystemMonitor")
 current_working_directory = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +17,7 @@ current_working_directory = os.path.dirname(os.path.abspath(__file__))
 @mcp.tool()
 async def get_disk_usage_handler(query: DiskQueryInput):
     """Used to fetch the storage space utilization of the device"""
+    
     disk_details = get_disk_usage()
     
     disk_ = DiskQueryOutput(
@@ -28,7 +31,7 @@ async def get_disk_usage_handler(query: DiskQueryInput):
 @mcp.tool()
 async def get_time_handler(query: TimeQueryInput):
     """Used to fetch the date and time across timezones"""
-    sys.stderr.write(f"\n[Executing Tool: get_time] for timezone: '{query.time_zone}'\n")
+    logger.info(f"Executing Tool: get_time for timezone: '{query.time_zone}'")
 
     date_time_data = get_time(time_zone=query.time_zone)
     
@@ -44,7 +47,7 @@ async def get_time_handler(query: TimeQueryInput):
 @mcp.tool()
 async def fetch_web_content_handler(query: WebQueryInput):
     """Used to access the Internet and get raw text details from a webpage."""
-    sys.stderr.write(f"\n[Executing Tool: fetch_web_content] for URL: '{query.url}'\n")
+    logger.info(f"Executing Tool: fetch_web_content for URL: '{query.url}'")
 
     raw_data = await fetch_web_content(query.url)
     raw_data = WebQueryOutput(
@@ -60,15 +63,16 @@ async def search_local_files_handler(query: SearchQueryInput):
     """Used to search the local file system and get matching results"""
     global current_working_directory
     target_directory = query.directory or current_working_directory
-    sys.stderr.write(f"\n[Executing Tool: search_local_files] for: '{query.keyword}'\n")
+    logger.info(f"Executing Tool: search_local_files for: '{query.keyword}'")
+
     
     raw_data = await asyncio.to_thread(search_local_files, target_directory, query.keyword)
     validate_data = SearchQueryOutput(
-        directory=raw_data['directory'],
-        keyword=raw_data['keyword'],
-        matches=raw_data['matches'],
-        truncated=raw_data['truncated'],
-        message=raw_data['message']
+        directory=raw_data.get('directory'),
+        keyword=raw_data.get('keyword'),
+        matches=raw_data.get('matches'),
+        truncated=raw_data.get('truncated'),
+        message=raw_data.get('message')
     )
     
     return validate_data.matches
@@ -78,7 +82,7 @@ async def list_directory_contents_handler(query: ListDirectoryInput):
     """Used to get the directories and files inside a directory"""
     global current_working_directory
     target_directory = query.directory or current_working_directory
-    sys.stderr.write(f"\n[Executing Tool: search_local_files] for: '{target_directory}'\n")
+    logger.info(f"Executing Tool: list_directory_contents for: '{target_directory}'")
     
     raw_data = list_directory_contents(target_directory)
     validate_data = ListDirectoryOutput(
@@ -93,7 +97,7 @@ async def list_directory_contents_handler(query: ListDirectoryInput):
 @mcp.tool()
 async def resolve_and_validate_path_handler(query: ChangeDirectoryInput):
     global current_working_directory
-    sys.stderr.write(f"\n[Executing Tool: change_directory] for: '{query.path}'\n")
+    logger.info(f"Executing Tool: change_directory for: '{query.path}'")
     try:
         new_path = resolve_and_validate_path(current_working_directory, query.path)
         current_working_directory = new_path
@@ -128,7 +132,7 @@ async def get_current_directory_handler(query: GetDirectoryInput):
 @mcp.tool()
 async def read_local_file_handler(query: ReadFileInput):
     """To Read the files"""
-    sys.stderr.write(f"\n[Executing Tool: read_local_files to read the file at {query.file_path}] '\n")
+    logger.info(f"Executing Tool: read_local_files to read the file at '{query.file_path}'")
     
     global current_working_directory
     current_dir = query.directory or current_working_directory
