@@ -1,12 +1,14 @@
 import requests
-import json
+import json, httpx
 from schemas.tool_schemas import Message
 from schemas.llm_schema import LLMResponse, LLMClient,  ToolCall
 from config import settings
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 class OllamaClient(LLMClient):
     
-    def chat(self, messages: list[Message], tools: list[dict] | None = None) -> LLMResponse:
+    async def chat(self, messages: list[Message], tools: list[dict] | None = None) -> LLMResponse:
         
         payload = {
             "model": settings.OLLAMA_MODEL,
@@ -17,8 +19,16 @@ class OllamaClient(LLMClient):
         if tools:
             payload["tools"] = tools
             
-        response = requests.post(settings.ollama_url, json=payload)
-        response_data = response.json()
+        timeout = httpx.Timeout(
+        connect=10.0,    # time to establish connection
+        read=120.0,      # time to wait for response — this is what's failing
+        write=10.0,      # time to send the request
+        pool=10.0        # time to acquire a connection from the pool
+        )
+            
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(settings.ollama_url, json=payload)
+            response_data = response.json()
         
         message_data = response_data.get("message", {})
         

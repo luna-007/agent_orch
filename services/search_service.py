@@ -9,7 +9,9 @@ def search_local_files(directory: str, keyword: str):
                 return {
                     "directory": directory,
                     "keyword": keyword,
-                    "matches": matches
+                    "matches": matches,
+                    "truncated": True,
+                    "Message": "Search stopped after 100 files. Narrow the directory to get full results."
                     }
             files_checked +=1
             file_path = os.path.join(root, file)
@@ -24,7 +26,8 @@ def search_local_files(directory: str, keyword: str):
     return {
         "directory": directory,
         "keyword": keyword,
-        "matches": matches
+        "matches": matches,
+        "truncated": False
     }
     
 def list_directory_contents(directory: str):
@@ -51,3 +54,18 @@ def resolve_and_validate_path(current_dir: str, target_path: str):
     if not os.path.isdir(new_path):
         raise NotADirectoryError(f"Path '{target_path} is not a directory.'")
     return new_path
+
+def read_local_file(current_dir: str, file_path: str) -> dict:
+    
+    target_path = os.path.abspath(os.path.join(current_dir, file_path))
+    
+    if not os.path.exists(target_path):
+        raise FileNotFoundError(f"Path: {target_path} does not exist.")
+    
+    if not os.path.isfile(target_path):
+        raise IsADirectoryError(f"Path: {target_path} is a directory, not a file.")
+    
+    with open(target_path, "r", encoding='utf-8') as f:
+        content = f.read()
+        
+    return {"file_path": target_path, "content": content}

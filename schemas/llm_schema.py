@@ -12,5 +12,5 @@ class LLMResponse(BaseModel):
     
 class LLMClient(Protocol):
     
-    def chat(self, messages: list[Message], tools: list | None = None) -> LLMResponse:
+    async def chat(self, messages: list[Message], tools: list | None = None) -> LLMResponse:
         """"""

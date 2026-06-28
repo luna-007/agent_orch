@@ -14,3 +14,4 @@ json_data = {
 response = requests.post('https://generativelanguage.googleapis.com/v1beta/interactions', headers=headers, json=json_data)
 
 print(response.text)
+

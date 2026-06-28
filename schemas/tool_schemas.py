@@ -57,6 +57,8 @@ class SearchQueryOutput(BaseModel):
     directory: str
     keyword: str
     matches: list[str]
+    truncated: bool
+    message: str | None
     
 class ListDirectoryInput(BaseModel):
     directory: Optional[str] = Field(
@@ -85,3 +87,11 @@ class GetDirectoryInput(BaseModel):
 class GetDirectoryOutput(BaseModel):
     current_directory: str
     
+class ReadFileInput(BaseModel):
+    file_path: str 
+    directory: Optional[str] = None
+    
+class ReadFileOutput(BaseModel):
+    file_path: Optional[str] = None
+    content: Optional[str] = None
+    error: Optional[str] = None

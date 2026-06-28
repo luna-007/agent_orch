@@ -120,4 +120,25 @@
             "properties": {}
         }
     }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "read_local_file",
+        "description": "To Read the local stored files",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "The path of the target file"
+                },
+                "directory": {
+                    "type": "string",
+                    "description": "The path of the directory"
+                }
+            },
+            "required": ["file_path"]
+        }
+    }
 }]
