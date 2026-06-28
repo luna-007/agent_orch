@@ -13,18 +13,30 @@ Most agent frameworks make building AI applications easy, but they hide the deta
 - How tool calling is structured and dispatched
 - How inputs and outputs are validated before and after execution
 - How async I/O keeps the agent responsive during tool execution
-- How a pluggable LLM client interface lets you swap providers without changing agent logic
+- How retry logic and error recovery make agents production-resilient
+- How a pluggable LLM client interface lets you swap providers without touching agent logic
+- How path sandboxing keeps file system tools safe
 - How MCP connects models to real-world capabilities
 
-Agent-Orch is built to answer those questions through readable, minimal code. Every component — orchestration loop, tool registration, schema validation, session persistence — is intentionally visible and easy to follow.
+Agent-Orch is built to answer those questions through readable, minimal code.
 
 ---
 
 ## Features
 
-**Async ReAct Loop with Parallel Tool Execution** — The agent reasons, selects tools, and executes them. When the model requests multiple tools in one turn, they are dispatched concurrently via `asyncio.gather()`. A configurable `max_iter` cap (default: 5) prevents runaway loops.
+**Async ReAct Loop with Parallel Tool Execution** — The agent reasons, selects tools, and executes them. When the model requests multiple tools in one turn, they are dispatched concurrently via `asyncio.gather()`. A configurable `max_iter` cap (default: 10) prevents runaway loops.
 
-**Pluggable LLM Clients** — A `LLMClient` Protocol in `schemas/llm_schema.py` decouples the orchestration loop from any specific provider. `OllamaClient` and `GeminiClient` are both included and ready to use.
+**Retry Logic with Exponential Backoff** — LLM calls are wrapped in a retry loop (3 attempts, backoff factor of 2.0). Transient network failures or model timeouts are handled gracefully without crashing the session.
+
+**Tool Error Recovery** — If a tool raises an exception mid-loop, the error is caught, logged, and returned to the model as a result string. The agent can then decide to retry, try a different approach, or explain the failure — rather than the entire loop crashing.
+
+**Structured Logging** — All tool executions, LLM calls, warnings, and errors are logged via Python's `logging` module. Logs go to both the console (stderr) and a rotating file (`agent_orch.log`, max 1 MB, 2 backups). `httpx` noise is suppressed at WARNING level.
+
+**Path Sandboxing** — All file system tools (`search_local_files`, `list_directory_contents`, `change_directory`, `read_local_file`) validate paths against a `SANDBOX_ROOT` before execution, preventing directory traversal attacks.
+
+**Startup Config Validation** — `config.py` uses `pydantic-settings` with a `@model_validator` that checks for required environment variables (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`) at startup and fails fast with a clear error message before any agent loop runs.
+
+**Pluggable LLM Clients** — A `LLMClient` Protocol in `schemas/llm_schema.py` decouples the orchestration loop from any specific provider. `OllamaClient` and `GeminiClient` are both included. The client is instantiated in `main()` and injected into `agent_loop()`, not hardcoded as a global.
 
 **Dual Execution Modes** — Runs either as a standalone CLI agent or as a fully compliant MCP server that integrates with Claude Code, Cursor, or any MCP-compatible client.
 
@@ -46,30 +58,42 @@ Agent-Orch is built to answer those questions through readable, minimal code. Ev
               │ python3 main.py                                  │ stdio pipe
               ▼                                                  ▼
 ┌─────────────────────────────┐                    ┌────────────────────────┐
-│   main.py                   │                    │   registry.py          │
-│   main() → asyncio.run()    │                    │   MCP Server           │
-│   agent_loop() REPL         │                    └────────────┬───────────┘
-│   run_turn() ReAct Loop     │                                 │
+│   main()                    │                    │   registry.py          │
+│   handle_startup_menu()     │                    │   MCP Server           │
+│   asyncio.run(agent_loop()) │                    └────────────┬───────────┘
 └─────────────┬───────────────┘                                 │
-              └──────────────────┬──────────────────────────────┘
-                                 │
-                                 ▼
-                   ┌─────────────────────────────┐
-                   │   LLMClient (Protocol)       │
-                   │   OllamaClient  (local)      │
-                   │   GeminiClient  (cloud)      │
-                   └─────────────┬───────────────┘
-                                 │
-                   ┌─────────────────────────────┐
-                   │   registry.py               │
-                   │   async tool handlers       │
-                   │   Pydantic validation       │
-                   └─────────────┬───────────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              ▼                  ▼                  ▼
-        disk_service       web_service (async)   search_service
-        time_service       memory_service        ai_services
+              │                                                 │
+┌─────────────▼───────────────┐                                 │
+│   agent_loop()              │◄────────────────────────────────┘
+│   REPL — user input/output  │
+└─────────────┬───────────────┘
+              │
+┌─────────────▼───────────────────────────────────────┐
+│   run_turn()                                        │
+│   ReAct loop — up to 10 iterations                  │
+│   Retry logic — 3 attempts, exponential backoff     │
+│   Tool error recovery — errors fed back to model    │
+└─────────────┬───────────────────────────────────────┘
+              │
+┌─────────────▼───────────────┐
+│   LLMClient (Protocol)      │
+│   OllamaClient  (local)     │
+│   GeminiClient  (cloud)     │
+└─────────────┬───────────────┘
+              │
+┌─────────────▼───────────────┐
+│   registry.py               │
+│   async tool handlers       │
+│   Pydantic I/O validation   │
+│   logger.info() on each call│
+└─────────────┬───────────────┘
+              │
+┌─────────────▼────────────────────────────────────┐
+│   services/                                      │
+│   web_service     (async httpx)                  │
+│   search_service  (sandboxed, asyncio.to_thread) │
+│   disk_service    memory_service  time_service   │
+└──────────────────────────────────────────────────┘
 ```
 
 ---
@@ -78,10 +102,11 @@ Agent-Orch is built to answer those questions through readable, minimal code. Ev
 
 ```text
 agent_orch/
-├── main.py                    # Entry point, ReAct loop (run_turn), agent REPL (agent_loop)
+├── main.py                    # Entry point, ReAct loop (run_turn), REPL (agent_loop)
 ├── registry.py                # Async tool handlers, MCP server, available_tools registry
 ├── cli.py                     # Terminal session picker (new / resume)
-├── config.py                  # Settings for Ollama and Gemini loaded from .env
+├── config.py                  # Pydantic BaseSettings, startup validation, logging setup
+├── PRODUCTION_IMPROVEMENTS.md # Tracked list of production readiness improvements
 │
 ├── clients/
 │   ├── ollama_client.py       # OllamaClient — async httpx, think mode, configurable timeout
@@ -96,7 +121,7 @@ agent_orch/
     ├── ai_services.py         # Generates session titles via the LLM
     ├── disk_service.py        # Disk usage via shutil
     ├── memory_service.py      # SQLite session and message persistence
-    ├── search_service.py      # File search, directory listing, path resolution, file reading
+    ├── search_service.py      # Sandboxed file search, directory listing, path resolution, file reading
     ├── time_service.py        # Timezone-aware datetime via zoneinfo
     └── web_service.py         # Async web page fetcher via httpx
 ```
@@ -110,44 +135,53 @@ agent_orch/
 | `get_disk_usage` | Returns total, used, or free disk space |
 | `get_time` | Returns date, time, timezone, or combined for any IANA timezone |
 | `fetch_web_content` | Async — fetches and cleans raw text from a URL |
-| `search_local_files` | Searches files in a directory for a keyword; truncates at 100 files with a signal |
-| `list_directory_contents` | Returns both files and subdirectories at a path |
-| `change_directory` | Updates the session's active working directory (`cd`) |
+| `search_local_files` | Sandboxed — keyword search across files; truncates at 100 with a signal |
+| `list_directory_contents` | Sandboxed — returns both files and subdirectories at a path |
+| `change_directory` | Sandboxed — updates the session's working directory (`cd`) |
 | `get_current_directory` | Returns the session's current working directory (`pwd`) |
-| `read_local_file` | Reads and returns the full text content of a file |
+| `read_local_file` | Sandboxed — reads and returns the full text content of a file |
 
 ---
 
 ## How the ReAct Loop Works
 
-The loop is split cleanly across two functions in `main.py`:
+**`main()`** — synchronous entry point. Runs the startup menu (which uses `questionary` and must stay outside the async event loop), then hands off to `asyncio.run(agent_loop(...))`.
 
-**`agent_loop()`** — the outer REPL. Accepts user input, appends it to message history, calls `run_turn()`, and prints the response. Runs for the lifetime of the session.
+**`agent_loop(session_id, messages, llm)`** — the outer REPL. Accepts user input, appends it to message history, calls `run_turn()`, and prints the response.
 
-**`run_turn()`** — the inner reasoning loop. Drives a single user turn to completion:
+**`run_turn(messages, llm, tools, on_save, max_iter=10)`** — the inner reasoning loop:
 
-1. Sends the full message history and tool schemas to the LLM client
-2. **If the model returns tool calls:** dispatches all of them concurrently via `asyncio.gather()`, appends all results as `tool` role messages, and loops
-3. **If the model returns a final response:** saves it and returns
-4. Raises `RuntimeError` if `max_iter` (default: 5) is reached
+1. Sends full message history + tool schemas to the LLM
+2. **LLM call is retried up to 3 times** with exponential backoff (2s, 4s, 8s) on failure
+3. **If the model returns tool calls:** all tools are dispatched in parallel via `asyncio.gather()`; individual tool errors are caught and returned as result strings so the model can respond to failures
+4. Tool results are appended to message history and the loop continues
+5. **If the model returns a final text response:** it is saved and returned
+6. `RuntimeError` is raised if `max_iter` (default: 10) is reached
 
 ```python
-async def run_turn(messages, llm, tools, on_save, max_iter=5) -> str:
+async def run_turn(messages, llm, tools, on_save, max_iter=10) -> str:
     iter = 0
     while True:
         iter += 1
         if iter >= max_iter:
             raise RuntimeError("Max Iterations reached")
 
-        response = await llm.chat(messages, tools)
+        # retry with exponential backoff
+        for attempt in range(3):
+            try:
+                response = await llm.chat(messages, tools)
+                break
+            except Exception as e:
+                sleep_time = 2.0 * (2 ** attempt)
+                await asyncio.sleep(sleep_time)
 
         if response.tool_calls:
-            # dispatch all tool calls in parallel
+            # dispatch all tools in parallel; errors are caught per-tool
             results = await asyncio.gather(
                 *[execute_tools(tc) for tc in response.tool_calls
                   if tc.name in available_tools]
             )
-            # append all results and loop
+            # append results and loop
         else:
             return response.content  # final answer
 ```
@@ -179,15 +213,20 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```env
-# Ollama (local, no API key required)
+# Ollama (required)
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5-coder:7b-instruct-q3_K_M
 
-# Gemini (optional — for cloud-based inference)
+# Gemini (optional — only needed if using GeminiClient)
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com
 GEMINI_MODEL=gemini-2.5-flash
 GEMINI_API_KEY=your_key_here
+
+# Database (optional — defaults to agent_memory.db)
+DATABASE_PATH=agent_memory.db
 ```
+
+If `OLLAMA_BASE_URL` or `OLLAMA_MODEL` are missing, the app will fail immediately at startup with a clear error message before any agent loop runs.
 
 > For machines with limited VRAM (~6 GB), a 7B–8B model at 3-bit quantization is recommended. Claude Code introduces significant system prompt overhead, so smaller quantizations help keep things running smoothly.
 
@@ -221,27 +260,17 @@ On startup, the session manager lets you start fresh or resume a past conversati
    2. Resume a past session
 ```
 
-Example interaction:
-
-```text
-you:
-List my project's root directory, find where the schemas folder is,
-then search inside it for the word 'Message'.
-
-[Executing Tool: list_directory_contents]
-[Executing Tool: list_directory_contents]
-[Executing Tool: search_local_files]
-
-Response:
-I found the schemas directory and identified the file 'tool_schemas.py'.
-The term 'Message' appears on line 15 as a Pydantic model definition.
-```
+Logs are written to `agent_orch.log` in the project root alongside console output.
 
 To switch to Gemini, update `main.py`:
 
 ```python
 from clients.gemini_client import GeminiClient
-llm = GeminiClient()
+
+def main():
+    session_id, messages = handle_startup_menu()
+    llm = GeminiClient()   # ← swap here
+    asyncio.run(agent_loop(session_id, messages, llm))
 ```
 
 ---
@@ -277,7 +306,39 @@ Launch Claude Code:
 claude
 ```
 
-All registered tools are immediately available via the MCP protocol.
+---
+
+## Adding a New LLM Client
+
+Implement the `LLMClient` Protocol — one method, `chat()`:
+
+```python
+# clients/my_client.py
+from schemas.llm_schema import LLMClient, LLMResponse, ToolCall
+from schemas.tool_schemas import Message
+
+class MyClient(LLMClient):
+    async def chat(
+        self,
+        messages: list[Message],
+        tools: list[dict] | None = None
+    ) -> LLMResponse:
+        # call your provider here
+        return LLMResponse(content=text, tool_calls=tool_call_list or None)
+```
+
+Then pass it into `agent_loop()` from `main()`:
+
+```python
+from clients.my_client import MyClient
+
+def main():
+    session_id, messages = handle_startup_menu()
+    llm = MyClient()
+    asyncio.run(agent_loop(session_id, messages, llm))
+```
+
+No changes to the loop, registry, or tools required.
 
 ---
 
@@ -308,6 +369,7 @@ class MyToolOutput(BaseModel):
 @mcp.tool()
 async def my_tool_handler(query: MyToolInput):
     """Fetches data from a source."""
+    logger.info(f"Executing Tool: my_tool for source: '{query.source}'")
     raw = fetch_data(query.source)
     validated = MyToolOutput(**raw)
     return validated.data
@@ -342,53 +404,23 @@ available_tools["my_tool"] = {
 }
 ```
 
-The tool is now available in both the CLI agent and the MCP server.
-
----
-
-## Adding a New LLM Client
-
-Implement the `LLMClient` Protocol — one method, `chat()`:
-
-```python
-# clients/my_client.py
-from schemas.llm_schema import LLMClient, LLMResponse, ToolCall
-from schemas.tool_schemas import Message
-
-class MyClient(LLMClient):
-    async def chat(
-        self,
-        messages: list[Message],
-        tools: list[dict] | None = None
-    ) -> LLMResponse:
-        # call your provider here
-        return LLMResponse(content=text, tool_calls=tool_call_list or None)
-```
-
-Then swap it in `main.py`:
-
-```python
-from clients.my_client import MyClient
-llm = MyClient()
-```
-
-No changes to the loop, registry, or tools required.
-
 ---
 
 ## Planned Improvements
 
-**Unified tool registration** — A single decorator that drives both `available_tools` and the MCP server, eliminating the current duplication between the two registration paths.
+See `PRODUCTION_IMPROVEMENTS.md` for the full tracked list. The highest priority items:
+
+**Orchestrator class** — Move `run_turn()`, `flat_tools`, and LLM wiring out of `main.py` into a dedicated `Orchestrator` class, so `main.py` only handles the REPL. This also makes `test.py` writable — you can inject a mock LLM without touching the loop.
+
+**Unified tool registration** — A single decorator that drives both `available_tools` and the MCP server, eliminating the current duplication.
 
 **System prompt support** — A configurable system prompt passed into `run_turn()` for consistent agent persona and instruction following.
 
-**Graceful tool error recovery** — Catch tool failures mid-loop and feed the error back as a `tool` role message, letting the model retry or take an alternative path instead of raising an exception.
+**Async input handling** — Replace `input()` with `aioconsole.ainput()` so the event loop isn't blocked while waiting for user input.
 
-**JIT RAG web reader** — Chunking and vector retrieval (ChromaDB or LanceDB) for large web pages, instead of hard-truncating fetched content at 5000 characters.
+**Test suite** — `test.py` currently contains a one-off Gemini API smoke test. A proper suite with mocked LLMs and deterministic tool inputs would make refactors safe.
 
-**Docker packaging** — A lightweight Docker image for the MCP server to ensure reproducible deployments without local Python setup.
-
-**Eval suite** — `test.py` is currently empty. A set of deterministic test cases with fixed inputs and expected tool call sequences would make the agent's behavior verifiable and regressions visible.
+**JIT RAG web reader** — Chunking and vector retrieval for large web pages instead of hard-truncating at 5000 characters.
 
 ---
 
