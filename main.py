@@ -1,6 +1,6 @@
 from config import settings
 import json, aioconsole
-from schemas.tool_schemas import Message
+from schemas.tool_schemas import GraphState, Message
 from registry import available_tools
 from services.memory_service import MemoryService
 from cli import handle_startup_menu
@@ -16,11 +16,11 @@ logger = logging.getLogger("agent_orch.orchestrator")
 flat_tools = [config["schema"] for config in available_tools.values()]
 
 async def run_turn(
-    messages: list[Message],
+    state: GraphState,
     llm: LLMClient,
     tools: list[dict],
     on_save: Callable[[Message], None],
-    max_iter: int = 10) -> str :
+    max_iter: int = 10) -> GraphState :
     
     iter = 0
     while True:
@@ -35,7 +35,7 @@ async def run_turn(
         
         for attempt in range(max_retries):
             try:
-                response = await llm.chat(messages, tools)
+                response = await llm.chat(state.messages, tools)
                 if response:
                     break
             except Exception as e:
@@ -66,7 +66,7 @@ async def run_turn(
                 tool_calls=[t.model_dump() for t in response.tool_calls]
             )
             on_save(assistant_msg)
-            messages.append(assistant_msg)
+            state.messages.append(assistant_msg)
             
             
             results = await asyncio.gather(
@@ -80,7 +80,7 @@ async def run_turn(
                     content=json.dumps(tool_output)
                 )
                 on_save(tool_msg)
-                messages.append(tool_msg)
+                state.messages.append(tool_msg)
             
         else:
             assistant_msg = Message(
@@ -88,14 +88,21 @@ async def run_turn(
                 content=response.content
             )
             on_save(assistant_msg)
-            messages.append(assistant_msg)
-            return response.content
+            state.messages.append(assistant_msg)
+            return state
 
 async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService, llm: LLMClient):
-    is_new_session = len(messages) == 0
+    
+    state = GraphState(
+        session_id=session_id,
+        messages=messages,
+        current_goal="Analyze local filesystem and run system checks",
+        accumulated_results={}
+    )
+    is_new_session = len(state.messages) == 0
     
     def on_save_callback(msg: Message):
-        memory_svc.save_message_to_db(session_id, msg)
+        memory_svc.save_message_to_db(state.session_id, msg)
     
     while True:
         try:
@@ -112,19 +119,20 @@ async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService,
         
         user_msg = Message(role="user", content=user_input)
         on_save_callback(user_msg)
-        messages.append(user_msg)
+        state.messages.append(user_msg)
         
-        final_response = await run_turn(
-            messages=messages,
+        state = await run_turn(
+            state=state,
             llm=llm,
             tools=flat_tools,
             on_save=on_save_callback
         )
+        final_response = state.messages[-1].content
         
         print(f"\nResponse: {final_response.replace('*', '')}")
         
         if is_new_session:
-            session_title = generate_session_title(messages[0].content, final_response)
+            session_title = generate_session_title(state.messages[0].content, final_response)
             memory_svc.update_session_name(session_id, session_title)
             is_new_session = False  
             

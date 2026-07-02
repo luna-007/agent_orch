@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
 from pydantic import BaseModel, Field
 
 class TimeQueryInput(BaseModel):
@@ -95,3 +95,10 @@ class ReadFileOutput(BaseModel):
     file_path: Optional[str] = None
     content: Optional[str] = None
     error: Optional[str] = None
+    
+class GraphState(BaseModel):
+    session_id: str
+    messages: list[Message]
+    current_goal: str
+    accumulated_results: dict[str, Any] = Field(default_factory=dict)
+    next_step: str | None = None
