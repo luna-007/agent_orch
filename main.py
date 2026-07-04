@@ -1,5 +1,5 @@
 from config import settings
-import json, aioconsole
+import json, aioconsole, os
 from schemas.tool_schemas import GraphState, Message
 from registry import available_tools
 from services.memory_service import MemoryService
@@ -11,88 +11,24 @@ import asyncio
 import logging
 from clients.ollama_client import OllamaClient
 
-logger = logging.getLogger("agent_orch.orchestrator")
+from app.orchestrator import Orchestrator
+from app.workflow_builder import WorkflowBuilder
+from app.intent_classifier import IntentClassifier
 
-flat_tools = [config["schema"] for config in available_tools.values()]
+logger = logging.getLogger("agent_orch.main")
 
 async def run_turn(
     state: GraphState,
     llm: LLMClient,
     tools: list[dict],
     on_save: Callable[[Message], None],
-    max_iter: int = 10) -> GraphState :
+    max_iter: int = 10,
+    system_prompt: str | None = None) -> GraphState :
     
-    iter = 0
-    while True:
-        iter += 1
-        if iter >= max_iter:
-            raise RuntimeError("Max Iterations reached")
-        
-        max_retries:int = 3
-        backoff_factor:float = 2.0
-        
-        response = None
-        
-        for attempt in range(max_retries):
-            try:
-                response = await llm.chat(state.messages, tools)
-                if response:
-                    break
-            except Exception as e:
-                if (attempt == max_retries - 1):
-                    raise RuntimeError(f"Connection failed due to {e}")
-                else:
-                    sleep_time = backoff_factor * (2 ** attempt)
-                    logger.warning(f"LLM call failed on attempt {attempt + 1}: {e}. Retrying in {sleep_time}s...")
-                    await asyncio.sleep(sleep_time)
-                    
-        if response is None:
-            raise RuntimeError("Failed to retrieve a valid response from the LLM.")
-        
-        if response.tool_calls:
-            async def execute_tools(tool_call):
-                tool_config = available_tools[tool_call.name]
-                try:
-                    validated_input = tool_config["input_model"](**tool_call.arguments)
-                    result = await tool_config["func"](validated_input)
-                except Exception as e:
-                    logger.error(f"Failed to execute tool '{tool_call.name}': {e}", exc_info=True)
-                    result = f"Error executing tool '{tool_call.name}': {str(e)}"
-                return tool_call.name, result
-            
-            assistant_msg = Message(
-                role="assistant",
-                content=response.content,
-                tool_calls=[t.model_dump() for t in response.tool_calls]
-            )
-            on_save(assistant_msg)
-            state.messages.append(assistant_msg)
-            
-            
-            results = await asyncio.gather(
-                *[execute_tools(tc) for tc in response.tool_calls if tc.name in available_tools]
-            )
-            
-            for function_name, tool_output in results:
-                tool_msg = Message(
-                    role = "tool",
-                    tool_name=function_name,
-                    content=json.dumps(tool_output)
-                )
-                on_save(tool_msg)
-                state.messages.append(tool_msg)
-            
-        else:
-            assistant_msg = Message(
-                role="assistant",
-                content=response.content
-            )
-            on_save(assistant_msg)
-            state.messages.append(assistant_msg)
-            return state
+    orchestrator = Orchestrator(llm, available_tools, None, settings)
+    return await orchestrator.run_turn(state, on_save, max_iter, system_prompt)
 
-async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService, llm: LLMClient):
-    
+async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService, builder: WorkflowBuilder, classifier: IntentClassifier):
     state = GraphState(
         session_id=session_id,
         messages=messages,
@@ -104,9 +40,12 @@ async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService,
     def on_save_callback(msg: Message):
         memory_svc.save_message_to_db(state.session_id, msg)
     
+    # We dynamically select and build the supervisor for the active session.
+    supervisor = None
+    
     while True:
         try:
-            # Non-blocking input wrapper with a 5-minute inactivity timeout!
+            # Non-blocking input wrapper with a 5-minute inactivity timeout
             user_input = await asyncio.wait_for(aioconsole.ainput("\nyou: "), timeout=300.0)
         except asyncio.TimeoutError:
             logger.warning(f"Session {session_id} has expired")
@@ -121,15 +60,34 @@ async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService,
         on_save_callback(user_msg)
         state.messages.append(user_msg)
         
-        state = await run_turn(
+        # Reset the FSM context for the new user query so the agents can run again
+        state.accumulated_results["ai_context"] = []
+        
+        if not supervisor:
+            # Classify user query intent to select the correct workflow
+            workflow_metadata = builder.get_workflow_metadata_list()
+            selected_flow = await classifier.classify(user_input, workflow_metadata)
+            print(f"[Supervisor] Routing session to workflow: {selected_flow}")
+            supervisor = builder.build_supervisor(selected_flow)
+            
+        # Update current goal dynamically based on active workflow
+        state.current_goal = supervisor.goal
+            
+        # Drive the multi-agent workflow via the supervisor
+        state = await supervisor.run_workflow(
             state=state,
-            llm=llm,
-            tools=flat_tools,
-            on_save=on_save_callback
+            on_save=on_save_callback,
+            strict=False
         )
         final_response = state.messages[-1].content
         
-        print(f"\nResponse: {final_response.replace('*', '')}")
+        try:
+            parsed = json.loads(final_response)
+            display_text = parsed.get("summary", final_response)
+        except Exception:
+            display_text = final_response
+            
+        print(f"\nResponse: {display_text.replace('*', '')}")
         
         if is_new_session:
             session_title = generate_session_title(state.messages[0].content, final_response)
@@ -137,15 +95,20 @@ async def agent_loop(session_id: str, messages: list, memory_svc: MemoryService,
             is_new_session = False  
             
 def main():
-    
     memory_svc = MemoryService(settings.DATABASE_PATH)
     llm = OllamaClient()
+    orchestrator = Orchestrator(llm, available_tools, memory_svc, settings)
+    
+    workspace_dir = os.path.dirname(os.path.abspath(__file__))
+    manifests_dir = os.path.join(workspace_dir, "manifests")
+    
+    # Instantiate Builder & Classifier (loads & validates all manifests at boot time)
+    builder = WorkflowBuilder(manifests_dir, available_tools, orchestrator)
+    classifier = IntentClassifier(llm)
     
     session_id, messages = handle_startup_menu(memory_svc)
     
-    
-    asyncio.run(agent_loop(session_id, messages, memory_svc, llm))
+    asyncio.run(agent_loop(session_id, messages, memory_svc, builder, classifier))
     
 if __name__ == "__main__":
     main()
-    

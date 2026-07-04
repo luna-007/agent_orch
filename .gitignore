@@ -27,3 +27,16 @@ __pycache__/
 venv/
 ENV/
 env/
+
+# Python test cache and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Production documentation
+PRODUCTION_IMPROVEMENTS.md
+ROADMAP_TO_PRODUCTION.md

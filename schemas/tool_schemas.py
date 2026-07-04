@@ -1,5 +1,6 @@
 from typing import Literal, Optional, Any
 from pydantic import BaseModel, Field
+import os
 
 class TimeQueryInput(BaseModel):
     type: Literal["date", "time","timezone","both"] = Field (
@@ -73,8 +74,11 @@ class ListDirectoryOutput(BaseModel):
     error: Optional[str] = None
     
 class ChangeDirectoryInput(BaseModel):
+    current_dir: str = Field(
+        description="The active, current directory of the session."
+    )
     path: str = Field(
-        description="This is for storing the target path to move to"
+        description="The folder name, relative path (e.g. '..', 'services'), or absolute path to move to."
     )
     
 class ChangeDirectoryOutput(BaseModel):
@@ -82,6 +86,9 @@ class ChangeDirectoryOutput(BaseModel):
     error: Optional[str] = None
     
 class GetDirectoryInput(BaseModel):
+    current_dir: str = Field(
+        description="The active, current directory of the session."
+    )
     pass
 
 class GetDirectoryOutput(BaseModel):
@@ -96,9 +103,43 @@ class ReadFileOutput(BaseModel):
     content: Optional[str] = None
     error: Optional[str] = None
     
+class WebSearchInput(BaseModel):
+    query: str = Field(
+        description="The search query string to search on the web."
+    )
+    max_results: Optional[int] = Field(
+        default=5,
+        description="The maximum number of search results to return."
+    )
+
+class WriteFileInput(BaseModel):
+    file_path: str = Field(
+        description="The target file path (relative to the active current directory or absolute)."
+    )
+    content: str = Field(
+        description="The text content to write into the file."
+    )
+    directory: Optional[str] = Field(
+        default=None,
+        description="The active, current directory of the session."
+    )
+
+class SystemInfoInput(BaseModel):
+    pass
+
 class GraphState(BaseModel):
     session_id: str
     messages: list[Message]
+    current_working_dir: str = Field(
+        default_factory=lambda: os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
     current_goal: str
     accumulated_results: dict[str, Any] = Field(default_factory=dict)
     next_step: str | None = None
+
+class AgentOutput(BaseModel):
+    status: Literal["success", "error", "partial"] = Field(description="The status of the agent run")
+    summary: str = Field(description="The summary of actions taken and final answer")
+    state: str = Field(description="The target state for the workflow FSM")
+    reason: str = Field(default="", description="The reasoning behind selecting the state and final answer")
+    tools_called: list[str] = Field(default_factory=list, description="A list of tools used during execution")

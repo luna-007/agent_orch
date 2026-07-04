@@ -91,3 +91,16 @@ def read_local_file(current_dir: str, file_path: str) -> dict:
         content = f.read()
         
     return {"file_path": target_path, "content": content}
+
+def write_local_file(current_dir: str, file_path: str, content: str) -> dict:
+    target_path = os.path.abspath(os.path.join(current_dir, file_path))
+    
+    _validate_sandbox_path(target_path)
+    
+    # Ensure parent directories exist
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    
+    with open(target_path, "w", encoding="utf-8") as f:
+        f.write(content)
+        
+    return {"file_path": target_path, "status": "success"}

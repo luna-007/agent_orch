@@ -1,109 +1,58 @@
 # Agent-Orch
 
-A lightweight LLM agent orchestration framework built from first principles. Agent-Orch exposes the core mechanics of how modern AI agents reason, call tools, validate inputs, and chain actions — without the abstractions that frameworks like LangChain, CrewAI, or AutoGen layer on top.
+A lightweight, multi-agent, config-driven LLM orchestration framework built from first principles. Agent-Orch exposes the core mechanics of how modern AI agents reason, call tools, route workflows, validate inputs, and chain actions — without the heavy layers of standard commercial frameworks.
 
-It runs against a **local Ollama model** or **Google Gemini** and supports two modes: an interactive CLI agent and a Model Context Protocol (MCP) server.
+It runs against a **local Ollama model** or **Google Gemini** and supports two modes: an interactive CLI supervisor agent and a Model Context Protocol (MCP) server.
 
 ---
 
-## Why This Project Exists
+## Architecture Overview
 
-Most agent frameworks make building AI applications easy, but they hide the details that make agents actually work:
-
-- How tool calling is structured and dispatched
-- How inputs and outputs are validated before and after execution
-- How async I/O keeps the agent responsive during tool execution
-- How retry logic and error recovery make agents resilient
-- How dependency injection makes services testable and swappable
-- How a pluggable LLM client interface lets you swap providers without touching agent logic
-- How path sandboxing keeps file system tools safe
-- How MCP connects models to real-world capabilities
-
-Agent-Orch is built to answer those questions through readable, minimal code.
+```text
+             ┌──────────────── CLI / MCP entrypoints ────────────────┐
+             │            python3 main.py / registry.py               │
+             └───────────────────────────┬────────────────────────────┘
+                                         ▼
+                         ┌───────── Intent Classifier ─────────┐
+                         │ Matches request to workflow intent  │
+                         └───────────────┬─────────────────────┘
+                                         ▼
+                         ┌───────── Workflow Builder ──────────┐
+                         │ Reads JSON manifest → builds:       │
+                         │ 1. FSM (Transition Engine)          │
+                         │ 2. Router (LLM selects state)       │
+                         │ 3. Supervisor (Hub-and-spoke loop)  │
+                         └───────────────┬─────────────────────┘
+                                         ▼
+                         ┌─────────── Supervisor ──────────────┐
+                         │ Orchestrates state transitions &    │
+                         │ runs sub-agents with clean history  │
+                         └───────────────┬─────────────────────┘
+                                         │
+                           ┌─────────────┴─────────────┐
+                           ▼                           ▼
+               ┌── Sub-agent (ReAct) ──┐   ...×N agents...
+               │   Orchestrator loop   │
+               └───────────┬───────────┘
+                           ▼
+               Tools (dynamic Pydantic schemas)
+```
 
 ---
 
 ## Features
 
-**Async ReAct Loop with Parallel Tool Execution** — The agent reasons, selects tools, and executes them. When the model requests multiple tools in one turn, they are dispatched concurrently via `asyncio.gather()`. A configurable `max_iter` cap (default: 10) prevents runaway loops.
-
-**Retry Logic with Exponential Backoff** — LLM calls are wrapped in a retry loop (3 attempts, backoff factor of 2.0). Transient network failures or model timeouts are handled gracefully without crashing the session.
-
-**Tool Error Recovery** — If a tool raises an exception mid-loop, the error is caught, logged, and returned to the model as a result string so it can decide how to respond rather than crashing the entire loop.
-
-**Async Input with Session Timeout** — User input uses `aioconsole.ainput()` instead of blocking `input()`, keeping the event loop free. Sessions automatically close after 5 minutes of inactivity with a clean message.
-
-**`MemoryService` Class with WAL Mode** — Session persistence is handled by a `MemoryService` class injected across `main()`, `cli.py`, and `agent_loop()`. The SQLite connection is opened with `PRAGMA journal_mode=WAL` for safe concurrent writes. The database path is configurable via `DATABASE_PATH` in `.env`.
-
-**Dynamic Schema Lookup with Fail-Fast Validation** — `registry.py` uses `get_schema_by_name()` to look up tool schemas by name from `tools.json` instead of positional indexing. If a schema is missing or misspelled, a `ValueError` is raised at startup before any agent loop runs.
-
-**Structured Logging** — All tool executions, LLM calls, warnings, and errors are logged via Python's `logging` module to both console (stderr) and a rotating file (`agent_orch.log`, max 1 MB, 2 backups). `httpx` noise is suppressed at WARNING level.
-
-**Path Sandboxing** — All file system tools validate paths against a `SANDBOX_ROOT` before execution, preventing directory traversal attacks.
-
-**Startup Config Validation** — `config.py` uses `pydantic-settings` with a `@model_validator` that checks for required environment variables at startup and fails fast with a clear error message.
-
-**Pluggable LLM Clients** — A `LLMClient` Protocol in `schemas/llm_schema.py` decouples the orchestration loop from any specific provider. `OllamaClient` and `GeminiClient` are both included. The client is instantiated in `main()` and injected into `agent_loop()`.
-
-**Dual Execution Modes** — Runs as a standalone CLI agent or as a fully compliant MCP server compatible with Claude Code, Cursor, or any MCP client.
-
-**Pydantic v2 Validation** — Every tool uses typed DTOs for both input and output.
-
-**Persistent Session Memory** — Conversations are stored in SQLite. Sessions can be resumed across restarts, and names are auto-generated by the model after the first exchange.
-
-**Chain-of-Thought Support** — Passes `"think": true` to Ollama, enabling extended reasoning tokens on models that support it (such as Qwen2.5-Coder).
-
----
-
-## Architecture
-
-```text
-    [ Interactive Terminal ]                    [ Claude Code / Cursor / MCP Client ]
-              │                                                  │
-              │ python3 main.py                                  │ stdio pipe
-              ▼                                                  ▼
-┌─────────────────────────────────────┐         ┌──────────────────────────┐
-│   main()                            │         │   registry.py            │
-│   MemoryService(DATABASE_PATH)      │         │   MCP Server             │
-│   OllamaClient()                    │         └────────────┬─────────────┘
-│   handle_startup_menu(memory_svc)   │                      │
-│   asyncio.run(agent_loop(...))      │                      │
-└────────────────┬────────────────────┘                      │
-                 │                                            │
-┌────────────────▼────────────────────────────────────────────┘
-│   agent_loop(session_id, messages, memory_svc, llm)
-│   aioconsole.ainput() — non-blocking, 5-min timeout
-│   on_save_callback → memory_svc.save_message_to_db()
-└────────────────┬───────────────────────────────────────────┘
-                 │
-┌────────────────▼──────────────────────────────────────────┐
-│   run_turn()                                              │
-│   ReAct loop — up to 10 iterations                        │
-│   Retry logic — 3 attempts, exponential backoff           │
-│   Tool error recovery — errors fed back as result strings │
-└────────────────┬──────────────────────────────────────────┘
-                 │
-┌────────────────▼──────────────┐
-│   LLMClient (Protocol)        │
-│   OllamaClient  (local)       │
-│   GeminiClient  (cloud)       │
-└────────────────┬──────────────┘
-                 │
-┌────────────────▼──────────────────────────────────────────┐
-│   registry.py                                             │
-│   get_schema_by_name() — fail-fast schema validation      │
-│   async tool handlers + Pydantic I/O validation           │
-│   logger.info() on every tool execution                   │
-└────────────────┬──────────────────────────────────────────┘
-                 │
-┌────────────────▼──────────────────────────────────────────┐
-│   services/                                               │
-│   web_service     (async httpx)                           │
-│   search_service  (sandboxed, asyncio.to_thread)          │
-│   memory_service  (MemoryService class, WAL mode)         │
-│   disk_service    time_service    ai_services             │
-└───────────────────────────────────────────────────────────┘
-```
+- **Multi-Agent FSM Routing**: Execution transitions dynamically between specialized sub-agents (`researcher`, `sys_admin`, `summarizer`) driven by an LLM-based `Router` naming FSM states and a deterministic Python `FSM` transition engine.
+- **Config-Driven Workflows**: Workflows are fully defined in JSON manifests inside `manifests/`, outlining metadata, aliases, scoped agent tool access, FSM transitions, and state decision matrices.
+- **Intent Classification**: Matches user inputs dynamically to workflow intents/aliases at startup to launch the correct supervisor workflow.
+- **Schema-Less Tool Registry**: Automatically generates OpenAPI/JSON-RPC tool schemas at boot time using Pydantic's `model_json_schema()` and docstrings, eliminating manual JSON schema configuration drift.
+- **Durable Web Fetching & Web Search**: 
+  - Upgraded web retrieval using `BeautifulSoup` to parse pages, decomposing scripts, styling, headers, and footers for clean text content.
+  - Zero-key Google/DuckDuckGo web searching with redirect URL extraction.
+- **Sandboxed Local File Writing**: Allows sub-agents to log outputs or write files under a strict `SANDBOX_ROOT`, blocking path traversal attempts.
+- **System Metrics & Inspection**: Gathers OS platforms, dynamic RAM statistics, and system uptime using `psutil`.
+- **Clean Chat History Isolation**: Isolates sub-agent ReAct turns by passing copies of conversation history, preventing intermediate JSON thinking steps from polluting user chat history. Saves only the final summaries to SQLite.
+- **FSM Context Turn Reset**: Clears FSM memory at the beginning of each user turn so follow-up queries run FSM states from the start instead of locking in the final state.
 
 ---
 
@@ -111,346 +60,164 @@ Agent-Orch is built to answer those questions through readable, minimal code.
 
 ```text
 agent_orch/
-├── main.py                    # Entry point, run_turn() ReAct loop, agent_loop() REPL
-├── registry.py                # Async tool handlers, get_schema_by_name(), MCP server
-├── cli.py                     # Terminal session picker — accepts injected MemoryService
-├── config.py                  # Pydantic BaseSettings, startup validation, logging setup
-├── PRODUCTION_IMPROVEMENTS.md # Tracked production readiness improvements
+├── main.py                  # CLI entrypoint, session loop, intent classification
+├── registry.py              # Tool registry, dynamic schema builder, MCP server
+├── cli.py                   # Terminal session database manager
+├── config.py                # Pydantic BaseSettings, startup validation, logging setup
+├── ROADMAP_TO_PRODUCTION.md # Phased evolution path (ignored from git)
 │
-├── clients/
-│   ├── ollama_client.py       # OllamaClient — async httpx, think mode, timeout config
-│   └── gemini_client.py       # GeminiClient — Gemini API, OpenAI→Google schema translation
+├── app/
+│   ├── agents/
+│   │   ├── base.py          # Abstract Agent definition
+│   │   └── generic.py       # Concrete GenericAgent with orchestrator loop
+│   ├── fsm.py               # Transition map validation engine
+│   ├── intent_classifier.py # LLM-based query-to-workflow classifier
+│   ├── manifest_schema.py   # jsonschema validator for workflow manifests
+│   ├── orchestrator.py      # ReAct loop, sandbox parameters injection, schema checks
+│   ├── prompt_manager.py    # Loads system templates from prompts/
+│   ├── router.py            # LLM router deciding next FSM state
+│   └── supervisor.py        # Hub-and-spoke supervisor running isolated workflows
+│
+├── manifests/
+│   └── sysadmin_flow.json   # Sysadmin agent FSM workflow manifest
+│
+├── prompts/
+│   └── system_default.txt   # Core agent instruction template
 │
 ├── schemas/
-│   ├── llm_schema.py          # LLMClient Protocol, LLMResponse, ToolCall DTOs
-│   ├── tool_schemas.py        # Pydantic DTOs for all tools and the Message model
-│   └── tools.json             # JSON tool schemas — looked up by name at startup
+│   ├── llm_schema.py        # LLMClient Protocol & response structures
+│   └── tool_schemas.py      # Pydantic input models (DTOs) for all tools
 │
-└── services/
-    ├── ai_services.py         # Generates session titles via the LLM
-    ├── disk_service.py        # Disk usage via shutil
-    ├── memory_service.py      # MemoryService class — SQLite with WAL, configurable path
-    ├── search_service.py      # Sandboxed file search, directory listing, path resolution
-    ├── time_service.py        # Timezone-aware datetime via zoneinfo
-    └── web_service.py         # Async web page fetcher via httpx
+├── services/
+│   ├── ai_services.py       # Generates session titles
+│   ├── disk_service.py      # Disk space inspection
+│   ├── memory_service.py    # SQLite WAL database session manager
+│   ├── search_service.py    # Sandboxed directory list, file read & file write
+│   ├── system_service.py    # System platform & RAM statistics
+│   ├── time_service.py      # Case-insensitive robust timezone time service
+│   └── web_service.py       # BeautifulSoup web fetcher and web searcher
+│
+└── tests/                   # 17-test suite for tools, schemas, and workflows
 ```
 
 ---
 
-## Tools
-
-| Tool | Description |
-|---|---|
-| `get_disk_usage` | Returns total, used, or free disk space |
-| `get_time` | Returns date, time, timezone, or combined for any IANA timezone |
-| `fetch_web_content` | Async — fetches and cleans raw text from a URL |
-| `search_local_files` | Sandboxed — keyword search across files; signals truncation at 100 files |
-| `list_directory_contents` | Sandboxed — returns both files and subdirectories at a path |
-| `change_directory` | Sandboxed — updates the session's working directory (`cd`) |
-| `get_current_directory` | Returns the session's current working directory (`pwd`) |
-| `read_local_file` | Sandboxed — reads and returns the full text content of a file |
-
----
-
-## How the ReAct Loop Works
-
-**`main()`** — synchronous entry point. Instantiates `MemoryService` and `OllamaClient`, runs the startup menu (which uses `questionary` and must stay outside the async event loop), then hands off to `asyncio.run(agent_loop(...))`.
-
-**`agent_loop(session_id, messages, memory_svc, llm)`** — the outer REPL. Uses `aioconsole.ainput()` for non-blocking input with a 5-minute inactivity timeout. Saves messages via the injected `MemoryService`.
-
-**`run_turn(messages, llm, tools, on_save, max_iter=10)`** — the inner reasoning loop:
-
-1. Sends full message history + tool schemas to the LLM
-2. LLM call is retried up to 3 times with exponential backoff (2s, 4s, 8s) on failure
-3. **If the model returns tool calls:** all tools are dispatched in parallel via `asyncio.gather()`; individual tool errors are caught and returned as result strings
-4. Tool results are appended to message history and the loop continues
-5. **If the model returns a final text response:** it is saved and returned
-6. `RuntimeError` raised if `max_iter` (default: 10) is reached
-
-```python
-async def agent_loop(session_id, messages, memory_svc, llm):
-    while True:
-        try:
-            user_input = await asyncio.wait_for(
-                aioconsole.ainput("\nyou: "), timeout=300.0  # 5-min timeout
-            )
-        except asyncio.TimeoutError:
-            print("[Session Timeout] Closing due to inactivity.")
-            break
-
-        final_response = await run_turn(messages, llm, flat_tools, on_save_callback)
-        print(f"\nResponse: {final_response}")
-
-
-async def run_turn(messages, llm, tools, on_save, max_iter=10) -> str:
-    iter = 0
-    while True:
-        iter += 1
-        if iter >= max_iter:
-            raise RuntimeError("Max Iterations reached")
-
-        for attempt in range(3):           # retry with backoff
-            try:
-                response = await llm.chat(messages, tools)
-                break
-            except Exception as e:
-                await asyncio.sleep(2.0 * (2 ** attempt))
-
-        if response.tool_calls:
-            results = await asyncio.gather(   # parallel dispatch
-                *[execute_tools(tc) for tc in response.tool_calls
-                  if tc.name in available_tools]
-            )
-        else:
-            return response.content        # final answer
-```
-
----
-
-## Installation
-
-Clone the repository:
-
-```bash
-git clone https://github.com/luna-007/agent_orch.git
-cd agent_orch
-```
-
-Create and activate a virtual environment:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Create a `.env` file in the project root:
-
-```env
-# Ollama (required — missing values raise an error at startup)
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5-coder:7b-instruct-q3_K_M
-
-# Gemini (optional — only needed if using GeminiClient)
-GEMINI_BASE_URL=https://generativelanguage.googleapis.com
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_API_KEY=your_key_here
-
-# Database (optional — defaults to agent_memory.db)
-DATABASE_PATH=agent_memory.db
-```
-
-If `OLLAMA_BASE_URL` or `OLLAMA_MODEL` are missing, the app fails immediately at startup with a clear error before any agent loop runs.
-
-> For machines with limited VRAM (~6 GB), a 7B–8B model at 3-bit quantization is recommended.
-
----
-
-## Running the CLI Agent
-
-Start Ollama:
-
-```bash
-ollama serve
-```
-
-Pull a model:
-
-```bash
-ollama pull qwen2.5-coder:7b-instruct-q3_K_M
-```
-
-Launch the agent:
-
-```bash
-python3 main.py
-```
-
-On startup, the session manager lets you start fresh or resume a past conversation:
-
-```text
-=== Agent Orch Session Manager ===
-=> 1. Start a fresh, private session (default)
-   2. Resume a past session
-```
-
-The session closes automatically after 5 minutes of inactivity. Logs are written to `agent_orch.log` alongside console output.
-
-To switch to Gemini, change one line in `main.py`:
-
-```python
-from clients.gemini_client import GeminiClient
-
-def main():
-    memory_svc = MemoryService(settings.DATABASE_PATH)
-    llm = GeminiClient()   # ← swap here
-    session_id, messages = handle_startup_menu(memory_svc)
-    asyncio.run(agent_loop(session_id, messages, memory_svc, llm))
-```
-
----
-
-## Running as an MCP Server
-
-Register the server with Claude Code:
-
-```bash
-claude mcp add system-monitor -- python3 /absolute/path/to/agent_orch/registry.py
-```
-
-Set the required environment variables:
-
-```bash
-export ANTHROPIC_BASE_URL="http://localhost:11434"
-export ANTHROPIC_API_KEY="ollama"
-export ANTHROPIC_AUTH_TOKEN="ollama"
-
-export ANTHROPIC_MODEL="qwen2.5-coder:7b-instruct-q3_K_M"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="qwen2.5-coder:7b-instruct-q3_K_M"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="qwen2.5-coder:7b-instruct-q3_K_M"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="qwen2.5-coder:7b-instruct-q3_K_M"
-
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"
-export CLAUDE_CODE_MAX_OUTPUT_TOKENS=4096
-export CLAUDE_CODE_DISABLE_THINKING="1"
-```
-
-Launch Claude Code:
-
-```bash
-claude
-```
-
----
-
-## Adding a New LLM Client
-
-Implement the `LLMClient` Protocol — one async method:
-
-```python
-# clients/my_client.py
-from schemas.llm_schema import LLMClient, LLMResponse
-from schemas.tool_schemas import Message
-
-class MyClient(LLMClient):
-    async def chat(
-        self,
-        messages: list[Message],
-        tools: list[dict] | None = None
-    ) -> LLMResponse:
-        # call your provider here
-        return LLMResponse(content=text, tool_calls=tool_call_list or None)
-```
-
-Then inject it in `main()`:
-
-```python
-from clients.my_client import MyClient
-
-def main():
-    memory_svc = MemoryService(settings.DATABASE_PATH)
-    llm = MyClient()
-    session_id, messages = handle_startup_menu(memory_svc)
-    asyncio.run(agent_loop(session_id, messages, memory_svc, llm))
-```
-
-No changes to the loop, registry, or tools required.
-
----
-
-## Adding a New Tool
+## How to Add a Tool
 
 **Step 1 — Write the service function**
-
 ```python
 # services/my_service.py
 def fetch_data(source: str) -> dict:
     return {"source": source, "data": "..."}
 ```
 
-**Step 2 — Define Pydantic DTOs in schemas/tool_schemas.py**
-
+**Step 2 — Define Pydantic Input model in schemas/tool_schemas.py**
 ```python
+# schemas/tool_schemas.py
 class MyToolInput(BaseModel):
     source: str = Field(description="The data source to query")
-
-class MyToolOutput(BaseModel):
-    source: str
-    data: str
 ```
 
-**Step 3 — Register the async handler in registry.py**
-
+**Step 3 — Register the handler in registry.py**
 ```python
+# registry.py
 @mcp.tool()
 async def my_tool_handler(query: MyToolInput):
     """Fetches data from a source."""
-    logger.info(f"Executing Tool: my_tool for '{query.source}'")
     raw = fetch_data(query.source)
-    validated = MyToolOutput(**raw)
-    return validated.data
+    return raw
 ```
 
-**Step 4 — Add the JSON schema to schemas/tools.json**
-
-```json
-{
-    "type": "function",
-    "function": {
-        "name": "my_tool",
-        "description": "Fetches data from a source",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "source": { "type": "string", "description": "The data source to query" }
-            },
-            "required": ["source"]
-        }
-    }
-}
-```
-
-**Step 5 — Register in available_tools**
-
+**Step 4 — Add to available_tools**
 ```python
-available_tools["my_tool"] = {
+# registry.py (inside available_tools dict)
+"my_tool": {
     "func": my_tool_handler,
     "input_model": MyToolInput,
-    "schema": get_schema_by_name(tools_list, "my_tool")  # fails fast if missing
+    "schema": generate_tool_schema("my_tool", my_tool_handler.__doc__, MyToolInput)
 }
 ```
-
-If the name in `available_tools` doesn't match the name in `tools.json`, a `ValueError` is raised at startup.
+*No JSON schema files are needed; the system generates schemas automatically from the Pydantic type signatures and handler docstrings.*
 
 ---
 
-## Planned Improvements
+## How to Configure a Workflow
 
-See `PRODUCTION_IMPROVEMENTS.md` for the full tracked list. Highest priority items remaining:
+Create or edit a workflow manifest JSON inside `manifests/` (e.g. `manifests/sysadmin_flow.json`). Here is an overview of the schema:
 
-**Orchestrator class** — Move `run_turn()`, `flat_tools`, and LLM wiring out of `main.py` into a dedicated `Orchestrator` class. This makes `test.py` writable — inject a mock LLM without touching the loop.
+```json
+{
+  "metadata": {
+    "name": "sysadmin_flow",
+    "version": "1.0.0",
+    "intent": "system_inquiry",
+    "goal": "Analyze local filesystem and run system checks",
+    "aliases": ["sys", "check", "disk", "files"]
+  },
+  "agents": {
+    "researcher": {
+      "description": "Gathers external context or time info.",
+      "system_prompt": "You are the Researcher agent. Gather external timezone details.",
+      "tools": ["fetch_web_content", "get_time", "web_search"]
+    },
+    "sys_admin": {
+      "description": "Inspects local file systems and system metrics.",
+      "system_prompt": "You are the SysAdmin agent. Inspect filesystem configuration.",
+      "tools": ["get_disk_usage", "list_directory_contents", "get_system_info"]
+    },
+    "summarizer": {
+      "description": "Compiles all findings.",
+      "system_prompt": "You are the Summarizer agent. Compile all findings into a clean report.",
+      "tools": []
+    }
+  },
+  "fsm": {
+    "transitions": {
+      "NEW": "researcher",
+      "RESEARCH_DONE": "sys_admin",
+      "SYS_ADMIN_DONE": "summarizer",
+      "SUMMARIZED": "FINISH"
+    },
+    "decision_matrix": [
+      {"name": "NEW", "description": "Workflow is starting."},
+      {"name": "RESEARCH_DONE", "description": "Research completed, ready for system checks."},
+      {"name": "SYS_ADMIN_DONE", "description": "System checks completed, ready to summarize."},
+      {"name": "SUMMARIZED", "description": "Final summary completed."}
+    ]
+  }
+}
+```
 
-**Unified tool registration** — A single decorator to drive both `available_tools` and the MCP server, eliminating the current duplication between the two registration paths.
+---
 
-**System prompt support** — A configurable system prompt passed into `run_turn()` for consistent agent persona and instruction following.
+## Running the CLI Agent
 
-**Test suite** — `test.py` currently contains a one-off Gemini smoke test. A proper suite with mocked LLMs and deterministic tool inputs would make refactors safe and `PRODUCTION_IMPROVEMENTS.md` item 9 closeable.
+Start Ollama:
+```bash
+ollama serve
+```
 
-**JIT RAG web reader** — Chunking and vector retrieval for large web pages instead of hard-truncating at 5000 characters.
+Pull a model:
+```bash
+ollama pull qwen2.5-coder:7b-instruct-q3_K_M
+```
+
+Launch the agent:
+```bash
+python3 main.py
+```
+
+---
+
+## Running Tests
+
+Run the test suite to verify tool execution, FSM router state changes, and manifest parsing validation:
+```bash
+python3 -m pytest tests/
+```
 
 ---
 
 ## License
 
 MIT License
-
----
-
-## Author
-
-**Rahul Kumar** — Built as a learning project to understand how modern AI agents reason, call tools, and orchestrate workflows from first principles.

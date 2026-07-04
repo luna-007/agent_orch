@@ -2,7 +2,7 @@ from typing import Callable
 
 from schemas.tool_schemas import GraphState, Message
 from schemas.llm_schema import LLMClient
-from main import run_turn
+from app.orchestrator import Orchestrator
 from registry import available_tools
 
 
