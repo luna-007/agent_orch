@@ -42,10 +42,14 @@ It runs against a **local Ollama model** or **Google Gemini** and supports two m
 
 ## Features
 
-- **Multi-Agent FSM Routing**: Execution transitions dynamically between specialized sub-agents (`researcher`, `sys_admin`, `summarizer`) driven by an LLM-based `Router` naming FSM states and a deterministic Python `FSM` transition engine.
+- **Multi-Agent FSM Routing**: Execution transitions dynamically between specialized sub-agents (`researcher`, `sys_admin`, `summarizer`, `analyzer`, `refactoring_agent`) driven by an LLM-based `Router` naming FSM states and a deterministic Python `FSM` transition engine.
 - **Config-Driven Workflows**: Workflows are fully defined in JSON manifests inside `manifests/`, outlining metadata, aliases, scoped agent tool access, FSM transitions, and state decision matrices.
-- **Intent Classification**: Matches user inputs dynamically to workflow intents/aliases at startup to launch the correct supervisor workflow.
+- **Dynamic Multi-Workflow Routing**: Integrates turn-by-turn intent classification, automatically compiling and caching LangGraph supervisors only when the user's intent switches workflows mid-session.
+- **Smart Checkpoint Resuming**: Detects new user messages on resumed sessions, resetting FSM states to the router (`START` node) to re-classify and dispatch the new prompt rather than repeating interrupted steps with stale context.
+- **SQLite Durable Checkpointing**: Uses SQLite-backed LangGraph checkpointers to persist execution graphs across terminal restarts, allowing users to pause, resume, and review past agent sessions.
+- **Robust FSM State Coercion**: Validates agent transitions against manifest-defined states, gracefully coercing invalid or arbitrary outputs to their designated `fallback_state` to prevent infinite loops.
 - **Schema-Less Tool Registry**: Automatically generates OpenAPI/JSON-RPC tool schemas at boot time using Pydantic's `model_json_schema()` and docstrings, eliminating manual JSON schema configuration drift.
+- **Ollama Integration & API Compatibility**: Cleanses request payloads of extra schema properties, dynamically transforms `tool_name` references to standard `name` parameters, and enforces lowercase model tagging to prevent registry pulling hangs.
 - **Durable Web Fetching & Web Search**: 
   - Upgraded web retrieval using `BeautifulSoup` to parse pages, decomposing scripts, styling, headers, and footers for clean text content.
   - Zero-key Google/DuckDuckGo web searching with redirect URL extraction.
@@ -79,7 +83,8 @@ agent_orch/
 │   └── supervisor.py        # Hub-and-spoke supervisor running isolated workflows
 │
 ├── manifests/
-│   └── sysadmin_flow.json   # Sysadmin agent FSM workflow manifest
+│   ├── sysadmin_flow.json   # Sysadmin agent FSM workflow manifest
+│   └── new_flow.json        # Python code refactoring workflow manifest
 │
 ├── prompts/
 │   └── system_default.txt   # Core agent instruction template
@@ -97,7 +102,7 @@ agent_orch/
 │   ├── time_service.py      # Case-insensitive robust timezone time service
 │   └── web_service.py       # BeautifulSoup web fetcher and web searcher
 │
-└── tests/                   # 17-test suite for tools, schemas, and workflows
+└── tests/                   # 14-test suite for tools, schemas, and workflows
 ```
 
 ---
