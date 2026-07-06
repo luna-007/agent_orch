@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "name": "my_new_flow",
+    "version": "1.0.0",
+    "intent": "code_refactoring",
+    "goal": "Refactor python files in the workspace",
+    "aliases": ["refactor", "cleanup", "format"]
+  },
+  "agents": {
+    "analyzer": {
+      "system_prompt": "You analyze code for code smells.",
+      "tools": ["list_directory_contents", "read_local_file"],
+      "fallback_state": "ANALYZED"
+    },
+    "refactoring_agent": {
+      "system_prompt": "You edit code to fix code smells.",
+      "tools": ["write_local_file"],
+      "fallback_state": "REFACTORED"
+    }
+  },
+  "fsm": {
+    "transitions": {
+      "NEW": "analyzer",
+      "ANALYZED": "refactoring_agent",
+      "REFACTORED": "FINISH"
+    },
+    "decision_matrix": [
+      {"name": "NEW", "description": "Start"},
+      {"name": "ANALYZED", "description": "Analysis complete"},
+      {"name": "REFACTORED", "description": "Refactoring complete"}
+    ]
+  }
+}
