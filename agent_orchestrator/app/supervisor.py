@@ -82,13 +82,23 @@ class Supervisor:
 
         strict = config.get("configurable", {}).get("strict", True)
 
-        # 2. Ask the Router to name the current state based on context
+        # 2. Fast-path: if the last agent declared a state that is a valid FSM transition key,
+        #    use it directly — no need for an LLM router call.
+        if ai_context:
+            last_state = ai_context[-1].state
+            if last_state and last_state in self.fsm.transitions:
+                next_agent_name = self.fsm.get_next_agent(last_state)
+                logger.info(f"Router fast-path: last agent state '{last_state}' -> '{next_agent_name}'")
+                return {"next_step": next_agent_name}
+
+        # 3. Fallback: Ask the Router LLM to determine the current state
         try:
             decision = await self.router.decide(
                 ai_context=ai_context,
                 current_goal=state.current_goal,
                 valid_states=self.fsm.get_valid_states(),
-                strict=strict
+                strict=strict,
+                messages=state.messages
             )
         except Exception as e:
             logger.error(f"Router decision failed: {e}")
@@ -100,7 +110,7 @@ class Supervisor:
 
         logger.info(f"Router selected state: '{decision.current_state}'. Reason: '{decision.reason}'")
 
-        # 3. Look up transition target from FSM transitions
+        # 4. Look up transition target from FSM transitions
         next_agent_name = self.fsm.get_next_agent(decision.current_state)
         
         return {"next_step": next_agent_name}
@@ -136,12 +146,13 @@ class Supervisor:
             # Sync workspace directory changes
             current_working_dir = agent_state.current_working_dir
             
-            # Map state name automatically if the agent output doesn't match a transition or is invalid
+            # Map state name automatically if the agent output doesn't match a valid FSM transition.
+            # Sub-agents returning "FINISH" means "I'm done with my part" — apply fallback to
+            # advance the workflow. Only skip fallback if no fallback is configured (terminal agents).
             valid_states = set(self.fsm.transitions.keys()) | set(self.fsm.transitions.values())
-            if not agent_output.state or agent_output.state == "FINISH" or agent_output.state not in valid_states:
-                fallback = self.fallback_states.get(agent_name)
-                if fallback:
-                    agent_output.state = fallback
+            fallback = self.fallback_states.get(agent_name)
+            if fallback and (not agent_output.state or agent_output.state == "FINISH" or agent_output.state not in valid_states):
+                agent_output.state = fallback
             
             logger.info(f"Agent '{agent_name}' output state: '{agent_output.state}'")
             
@@ -164,89 +175,94 @@ class Supervisor:
         self,
         state: GraphState,
         on_save: Callable,
-        strict: bool = True
+        strict: bool = True,
+        mcp_session: ClientSession | None = None
     ) -> GraphState:
         logger.info(f"Supervisor workflow started for session {state.session_id} with goal: '{state.current_goal}'")
         
         checkpoint_db = settings.CHECKPOINT_DATABASE_PATH
         
-        # Build path to decoupled mcp_server/server.py
-        workspace_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        server_path = os.path.join(workspace_dir, "mcp_server", "server.py")
-        
-        server_params = StdioServerParameters(
-            command="python3",
-            args=[server_path],
-            env={
-                **os.environ,
-                "OLLAMA_BASE_URL": settings.OLLAMA_BASE_URL,
-                "OLLAMA_MODEL": settings.OLLAMA_MODEL,
-                "GEMINI_BASE_URL": settings.GEMINI_BASE_URL,
-                "GEMINI_MODEL": settings.GEMINI_MODEL,
-                "GEMINI_API_KEY": settings.GEMINI_API_KEY or ""
-            }
-        )
-        
+        async def execute_graph(session: ClientSession):
+            async with AsyncSqliteSaver.from_conn_string(checkpoint_db) as memory:
+                # Compile graph with checkpointing
+                compiled_graph = self._graph.compile(checkpointer=memory)
+                
+                config: RunnableConfig = {
+                    "configurable": {
+                        "thread_id": state.session_id,
+                        "on_save": on_save,
+                        "strict": strict,
+                        "mcp_session": session
+                    }
+                }
+                
+                # Check if there is an existing checkpoint for this thread_id to resume from
+                state_info = await compiled_graph.aget_state(config)
+                if state_info and state_info.values:
+                    checkpoint_msgs = state_info.values.get("messages", [])
+                    # If the previous turn completed, OR if the user sent a new message, we reset to the router.
+                    if not state_info.next or len(state.messages) > len(checkpoint_msgs):
+                        logger.info(f"New turn or session restart detected for session {state.session_id}. Resetting graph state to router.")
+                        accumulated = dict(state.accumulated_results)
+                        accumulated["ai_context"] = []
+                        state.accumulated_results = accumulated
+                        await compiled_graph.aupdate_state(
+                            config,
+                            {
+                                "messages": state.messages,
+                                "accumulated_results": accumulated,
+                                "next_step": "NEW"
+                            },
+                            as_node=START
+                        )
+                        res = await compiled_graph.ainvoke(None, config)
+                    else:
+                        logger.info(f"Resuming active workflow turn from checkpoint for session {state.session_id}")
+                        res = await compiled_graph.ainvoke(None, config)
+                else:
+                    res = await compiled_graph.ainvoke(state, config)
+                
+                final_state = GraphState(**res)
+
+                # Clean up messages history: keep only original conversation + the final summary message
+                last_user_idx = -1
+                for idx, msg in enumerate(final_state.messages):
+                    if msg.role == "user":
+                        last_user_idx = idx
+                
+                summary_content = final_state.accumulated_results.get("last_agent_summary", "No summary report was generated.")
+                summary_msg = Message(
+                    role="assistant",
+                    content=f"Workflow completed successfully!\n\nSummary:\n{summary_content}"
+                )
+                
+                final_messages = final_state.messages[:last_user_idx + 1] + [summary_msg]
+                final_state.messages = final_messages
+                
+                return final_state
+
         try:
+            if mcp_session is not None:
+                return await execute_graph(mcp_session)
+            
+            # Build path to decoupled mcp_server/server.py
+            workspace_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            server_path = os.path.join(workspace_dir, "mcp_server", "server.py")
+            
+            server_params = StdioServerParameters(
+                command="python3",
+                args=[server_path],
+                env={
+                    **os.environ,
+                    "OLLAMA_BASE_URL": settings.OLLAMA_BASE_URL,
+                    "OLLAMA_MODEL": settings.OLLAMA_MODEL,
+                }
+            )
+            
             async with stdio_client(server_params) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
-                    
-                    async with AsyncSqliteSaver.from_conn_string(checkpoint_db) as memory:
-                        # Compile graph with checkpointing
-                        compiled_graph = self._graph.compile(checkpointer=memory)
-                        
-                        config: RunnableConfig = {
-                            "configurable": {
-                                "thread_id": state.session_id,
-                                "on_save": on_save,
-                                "strict": strict,
-                                "mcp_session": session
-                            }
-                        }
-                        
-                        # Check if there is an existing checkpoint for this thread_id to resume from
-                        state_info = await compiled_graph.aget_state(config)
-                        if state_info and state_info.values:
-                            checkpoint_msgs = state_info.values.get("messages", [])
-                            # If the previous turn completed, OR if the user sent a new message, we reset to the router.
-                            if not state_info.next or len(state.messages) > len(checkpoint_msgs):
-                                logger.info(f"New turn or session restart detected for session {state.session_id}. Resetting graph state to router.")
-                                await compiled_graph.aupdate_state(
-                                    config,
-                                    {
-                                        "messages": state.messages,
-                                        "accumulated_results": state.accumulated_results,
-                                        "next_step": "NEW"
-                                    },
-                                    as_node=START
-                                )
-                                res = await compiled_graph.ainvoke(None, config)
-                            else:
-                                logger.info(f"Resuming active workflow turn from checkpoint for session {state.session_id}")
-                                res = await compiled_graph.ainvoke(None, config)
-                        else:
-                            res = await compiled_graph.ainvoke(state, config)
-                        
-                        final_state = GraphState(**res)
-
-                        
-                        # Clean up messages history: keep only original conversation + the final summary message
-                        last_user_idx = -1
-                        for idx, msg in enumerate(final_state.messages):
-                            if msg.role == "user":
-                                last_user_idx = idx
-                        
-                        summary_content = final_state.accumulated_results.get("last_agent_summary", "No summary report was generated.")
-                        summary_msg = Message(
-                            role="assistant",
-                            content=f"Workflow completed successfully!\n\nSummary:\n{summary_content}"
-                        )
-                        
-                        final_messages = final_state.messages[:last_user_idx + 1] + [summary_msg]
-                        final_state.messages = final_messages
-                        
-                        return final_state
+                    return await execute_graph(session)
         except Exception as e:
             current_err = e
             while hasattr(current_err, "exceptions") and current_err.exceptions:

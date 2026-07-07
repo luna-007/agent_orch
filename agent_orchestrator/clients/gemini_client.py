@@ -33,7 +33,10 @@ class GeminiClient(LLMClient):
         
         payload: dict[str, Any] = {
             "model": settings.GEMINI_MODEL,
-            "input": conversation_text
+            "input": conversation_text,
+            "generation_config": {
+                "temperature": 0.0
+            }
         }
         
         if tools:
@@ -49,14 +52,14 @@ class GeminiClient(LLMClient):
             payload["tools"] = google_tools
             
         timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
-        sys.stderr.write(f"\n[DEBUG] Full Tools Payload:\n{json.dumps(payload.get('tools', []), indent=2)}\n")
         
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(settings.gemini_url, json=payload, headers=headers)
         
         if response.status_code != 200:
-            sys.stderr.write(f"\n[Google API Error {response.status_code}]: {response.text}\n")
-            return LLMResponse(content=f"API Error: {response.text}", tool_calls=None)
+            error_msg = f"Google API Error {response.status_code}: {response.text}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
             
         response_data = response.json()
         message_data = ""
@@ -78,6 +81,13 @@ class GeminiClient(LLMClient):
                 name=func_data.get("name"),
                 arguments=func_data.get("arguments", {})
             ))
+            
+        for step in steps:
+            if step.get("type") == "function_call":
+                tool_call_list.append(ToolCall(
+                    name=step.get("name"),
+                    arguments=step.get("arguments", {})
+                ))
             
         return LLMResponse(
             content=message_data,

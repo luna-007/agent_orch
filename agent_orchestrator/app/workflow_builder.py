@@ -62,20 +62,6 @@ class WorkflowBuilder:
     def get_workflow_metadata_list(self) -> List[dict]:
         return [w["metadata"] for w in self.workflows.values()]
 
-    def resolve_workflow_by_intent_or_alias(self, query: str) -> str:
-        # Check aliases first
-        query_lower = query.lower()
-        for name, data in self.workflows.items():
-            metadata = data.get("metadata", {})
-            aliases = metadata.get("aliases", [])
-            for alias in aliases:
-                if alias.lower() in query_lower:
-                    return name
-            intent = metadata.get("intent", "")
-            if intent and intent.lower() in query_lower:
-                return name
-        return "sysadmin_flow" # fallback default
-
     def build_supervisor(self, workflow_name: str) -> Supervisor:
         data = self.workflows.get(workflow_name)
         if not data:

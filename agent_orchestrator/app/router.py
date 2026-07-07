@@ -21,7 +21,8 @@ class Router:
         ai_context: List[AgentOutput],
         current_goal: str,
         valid_states: List[Dict[str, Any]],
-        strict: bool = True
+        strict: bool = True,
+        messages: List[Message] | None = None
     ) -> RouterDecision:
         # Format history of outputs
         history_str = ""
@@ -29,34 +30,59 @@ class Router:
             history_str += f"{i+1}. Agent Output:\n  State: {out.state}\n  Status: {out.status}\n  Summary: {out.summary}\n  Reason: {out.reason}\n\n"
         if not history_str:
             history_str = "No execution history yet. We are starting the workflow.\n"
+            # Since no agents have executed yet, restrict valid states to only the starting entry-points.
+            # This programmatically prevents the LLM from choosing completed/terminal states.
+            valid_names = [s["name"] for s in valid_states]
+            starting_names = ["NEW"]
+            if "RESEARCH_DONE" in valid_names:
+                starting_names.append("RESEARCH_DONE")
+            valid_states = [s for s in valid_states if s["name"] in starting_names]
 
         # Format valid states matrix
         states_str = ""
         for state_item in valid_states:
             states_str += f"- Name: {state_item['name']}\n  Description: {state_item['description']}\n"
 
+        # Format the user's latest query/conversation if available
+        conversation_str = ""
+        if messages:
+            conversation_str = "Current Conversation History:\n"
+            # Extract user messages from the end of the history
+            for msg in messages[-3:]:
+                if msg.role != "system":
+                    content_text = msg.content
+                    # If it is JSON, parse and extract summary to keep prompt clean
+                    if content_text.strip().startswith("{") and content_text.strip().endswith("}"):
+                        try:
+                            parsed = json.loads(content_text)
+                            content_text = parsed.get("summary", content_text)
+                        except Exception:
+                            pass
+                    conversation_str += f"- {msg.role.upper()}: {content_text}\n"
+            conversation_str += "\n"
+
         prompt = f"""You are the Workflow Supervisor Router.
-Your job is to analyze the history of actions taken by the agents and determine the current FSM state of the workflow.
+Your job is to analyze the history of actions taken by the agents, the current conversation history, and determine the current FSM state of the workflow.
 
 Overall workflow goal: {current_goal}
 
 Valid FSM States and their descriptions:
 {states_str}
 
-Execution history of prior agents:
+{conversation_str}Execution history of prior agents:
 {history_str}
 
-Based on the overall workflow goal and execution history, decide the current FSM state of the workflow.
+Based on the overall workflow goal, the conversation history, and the execution history of prior agents, decide the current FSM state of the workflow.
 You MUST output your response STRICTLY as a JSON object in this format:
 {{
   "current_state": "<one of the valid FSM state names>",
   "reason": "<reasoning for selecting this state>"
 }}
 """
-        messages = [Message(role="user", content=prompt)]
+        chat_messages = [Message(role="user", content=prompt)]
         
         # Call the LLM to get FSM decision
-        response = await self.llm.chat(messages, None)
+        response = await self.llm.chat(chat_messages, None)
         content = response.content.strip() if response and response.content else ""
         
         decision = self._parse_decision(content)

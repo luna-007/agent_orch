@@ -20,10 +20,10 @@ class FakeLLMClient(LLMClient):
 
 # Mock classes for MCP ClientSession
 class MockTool:
-    def __init__(self, name: str, description: str, inputSchema: dict):
+    def __init__(self, name: str, description: str, input_schema: dict):
         self.name = name
         self.description = description
-        self.inputSchema = inputSchema
+        self.input_schema = input_schema
 
 class MockListToolsResult:
     def __init__(self, tools: list):
@@ -290,3 +290,136 @@ def test_three_tier_parsing():
     assert out4.state == "FINISH"
     assert out4.reason == "Fallback parsed from unstructured text"
     assert out4.tools_called == ["t4"]
+
+def test_schema_flattening_and_wrapping():
+    orchestrator = Orchestrator(None, None, None)
+
+    # 1. Test flattening of $defs ref
+    schema_defs = {
+        "properties": {
+            "query": {
+                "$ref": "#/$defs/DiskQueryInput"
+            }
+        },
+        "required": ["query"],
+        "type": "object",
+        "$defs": {
+            "DiskQueryInput": {
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["Total", "Used", "Free"]
+                    }
+                },
+                "required": ["type"],
+                "type": "object"
+            }
+        }
+    }
+    flat_defs = orchestrator._flatten_tool_schema(schema_defs)
+    assert flat_defs["properties"]["type"]["type"] == "string"
+    assert flat_defs["properties"]["type"]["enum"] == ["Total", "Used", "Free"]
+    assert "query" not in flat_defs["properties"]
+    assert flat_defs["required"] == ["type"]
+
+    # 2. Test flattening of definitions ref
+    schema_definitions = {
+        "properties": {
+            "query": {
+                "$ref": "#/definitions/DiskQueryInput"
+            }
+        },
+        "required": ["query"],
+        "type": "object",
+        "definitions": {
+            "DiskQueryInput": {
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["Total"]
+                    }
+                },
+                "required": ["type"],
+                "type": "object"
+            }
+        }
+    }
+    flat_definitions = orchestrator._flatten_tool_schema(schema_definitions)
+    assert flat_definitions["properties"]["type"]["type"] == "string"
+    assert flat_definitions["properties"]["type"]["enum"] == ["Total"]
+    assert flat_definitions["required"] == ["type"]
+
+    # 3. Test flattening of inline properties
+    schema_inline = {
+        "properties": {
+            "query": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["Free"]
+                    }
+                },
+                "required": ["type"]
+            }
+        },
+        "required": ["query"],
+        "type": "object"
+    }
+    flat_inline = orchestrator._flatten_tool_schema(schema_inline)
+    assert flat_inline["properties"]["type"]["type"] == "string"
+    assert flat_inline["properties"]["type"]["enum"] == ["Free"]
+    assert flat_inline["required"] == ["type"]
+
+@pytest.mark.asyncio
+async def test_history_cleaning_preserves_metadata(mock_memory_service, temp_sandbox_dir):
+    state = GraphState(
+        session_id="test_session",
+        messages=[
+            Message(role="user", content="Turn 1 Query"),
+            Message(role="assistant", content="", tool_calls=[ToolCall(name="get_system_info", arguments={})]),
+            Message(role="tool", tool_name="get_system_info", content="some system details"),
+            Message(
+                role="assistant",
+                content=json.dumps({
+                    "status": "success",
+                    "summary": "This is a summary of turn 1.",
+                    "state": "FINISH",
+                    "reason": "I ran get_system_info to check OS.",
+                    "tools_called": ["get_system_info"]
+                })
+            ),
+            Message(role="user", content="Turn 2 Query")
+        ],
+        current_working_dir=temp_sandbox_dir,
+        current_goal="Goal",
+        accumulated_results={}
+    )
+
+    llm = FakeLLMClient([
+        LLMResponse(content="I see the details.", tool_calls=None)
+    ])
+    
+    orchestrator = Orchestrator(
+        llm=llm,
+        memory_svc=mock_memory_service,
+        config=settings
+    )
+
+    await orchestrator.run_turn(state, lambda m: None)
+    
+    assert len(llm.calls) == 1
+    messages_sent, _ = llm.calls[0]
+    
+    # Message 0: Turn 1 Query (user)
+    # Message 1: Cleaned Turn 1 Response (assistant)
+    # Message 2: Turn 2 Query (user)
+    assert len(messages_sent) == 3
+    
+    assistant_msg = messages_sent[1]
+    assert assistant_msg.role == "assistant"
+    assert "Summary of response: This is a summary of turn 1." in assistant_msg.content
+    assert "Reasoning/Context: I ran get_system_info to check OS." in assistant_msg.content
+    assert "Tools executed in this turn: get_system_info" in assistant_msg.content
+
+

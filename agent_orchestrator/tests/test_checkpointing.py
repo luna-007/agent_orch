@@ -78,19 +78,14 @@ async def test_workflow_checkpointing_and_resume(tmp_path):
     assert "Simulated agent execution failure" in str(exc_info.value)
     
     # Run 2: Resume with healthy agents
+    # Router fast-path uses agent states directly, so no router LLM calls needed
     llm_responses_run2 = [
         # Researcher runs successfully:
         '{"status": "success", "summary": "Info: 10AM", "state": "RESEARCH_DONE", "reason": "Success", "tools_called": []}',
-        # Router decides state RESEARCH_DONE -> sys_admin:
-        '{"current_state": "RESEARCH_DONE", "reason": "Research complete"}',
         # SysAdmin runs successfully:
         '{"status": "success", "summary": "Disk: 40%", "state": "SYS_ADMIN_DONE", "reason": "Success", "tools_called": []}',
-        # Router decides state SYS_ADMIN_DONE -> summarizer:
-        '{"current_state": "SYS_ADMIN_DONE", "reason": "SysAdmin complete"}',
         # Summarizer runs successfully:
-        '{"status": "success", "summary": "Final report", "state": "SUMMARIZED", "reason": "Success", "tools_called": []}',
-        # Router decides state SUMMARIZED -> FINISH:
-        '{"current_state": "SUMMARIZED", "reason": "Workflow complete"}'
+        '{"status": "success", "summary": "Final report", "state": "SUMMARIZED", "reason": "Success", "tools_called": []}'
     ]
     
     llm2 = FakeLLMClient(llm_responses_run2)
@@ -124,15 +119,12 @@ async def test_multi_turn_session_reset(tmp_path):
     db_file = str(tmp_path / "test_checkpoints_multi.db")
     settings.CHECKPOINT_DATABASE_PATH = db_file
 
-    # First turn LLM responses
+    # First turn LLM responses (only initial router call uses LLM, rest use fast-path)
     llm_responses_turn1 = [
         '{"current_state": "NEW", "reason": "Beginning turn 1"}',
         '{"status": "success", "summary": "Turn 1 Research", "state": "RESEARCH_DONE", "reason": "Success", "tools_called": []}',
-        '{"current_state": "RESEARCH_DONE", "reason": "Research complete"}',
         '{"status": "success", "summary": "Turn 1 SysAdmin", "state": "SYS_ADMIN_DONE", "reason": "Success", "tools_called": []}',
-        '{"current_state": "SYS_ADMIN_DONE", "reason": "SysAdmin complete"}',
-        '{"status": "success", "summary": "Turn 1 final report", "state": "SUMMARIZED", "reason": "Success", "tools_called": []}',
-        '{"current_state": "SUMMARIZED", "reason": "Workflow complete"}'
+        '{"status": "success", "summary": "Turn 1 final report", "state": "SUMMARIZED", "reason": "Success", "tools_called": []}'
     ]
     
     llm1 = FakeLLMClient(llm_responses_turn1)
@@ -176,15 +168,12 @@ async def test_multi_turn_session_reset(tmp_path):
     final_state1 = await supervisor.run_workflow(state, lambda m: None, strict=True)
     assert "Turn 1 final report" in final_state1.messages[-1].content
     
-    # Second turn LLM responses (same thread ID)
+    # Second turn LLM responses (same thread ID, initial router uses LLM, rest fast-path)
     llm_responses_turn2 = [
         '{"current_state": "NEW", "reason": "Beginning turn 2"}',
         '{"status": "success", "summary": "Turn 2 Research", "state": "RESEARCH_DONE", "reason": "Success", "tools_called": []}',
-        '{"current_state": "RESEARCH_DONE", "reason": "Research complete"}',
         '{"status": "success", "summary": "Turn 2 SysAdmin", "state": "SYS_ADMIN_DONE", "reason": "Success", "tools_called": []}',
-        '{"current_state": "SYS_ADMIN_DONE", "reason": "SysAdmin complete"}',
-        '{"status": "success", "summary": "Turn 2 final report", "state": "SUMMARIZED", "reason": "Success", "tools_called": []}',
-        '{"current_state": "SUMMARIZED", "reason": "Workflow complete"}'
+        '{"status": "success", "summary": "Turn 2 final report", "state": "SUMMARIZED", "reason": "Success", "tools_called": []}'
     ]
     
     llm2 = FakeLLMClient(llm_responses_turn2)

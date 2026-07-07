@@ -21,7 +21,7 @@ logger = logging.getLogger("agent_orch.mcp_server")
 mcp = MCPServer("SystemMonitor")
 current_working_directory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-@mcp.tool()
+@mcp.tool(name="get_disk_usage")
 async def get_disk_usage_handler(query: DiskQueryInput):
     """Used to fetch the storage space utilization of the device"""
     disk_details = get_disk_usage()
@@ -32,7 +32,7 @@ async def get_disk_usage_handler(query: DiskQueryInput):
     )
     return getattr(disk_, query.type.lower())
 
-@mcp.tool()
+@mcp.tool(name="get_time")
 async def get_time_handler(query: TimeQueryInput):
     """Used to fetch the date and time across timezones"""
     logger.info(f"Executing Tool: get_time for timezone: '{query.time_zone}'")
@@ -45,7 +45,7 @@ async def get_time_handler(query: TimeQueryInput):
     )
     return getattr(time_, query.type)
 
-@mcp.tool()
+@mcp.tool(name="fetch_web_content")
 async def fetch_web_content_handler(query: WebQueryInput):
     """Used to access the Internet and get raw text details from a webpage."""
     logger.info(f"Executing Tool: fetch_web_content for URL: '{query.url}'")
@@ -57,7 +57,7 @@ async def fetch_web_content_handler(query: WebQueryInput):
     )
     return raw_data.content
 
-@mcp.tool()
+@mcp.tool(name="search_local_files")
 async def search_local_files_handler(query: SearchQueryInput):
     """Used to search the local file system and get matching results"""
     if query.directory is None:
@@ -73,7 +73,7 @@ async def search_local_files_handler(query: SearchQueryInput):
     )
     return validate_data.matches
 
-@mcp.tool()
+@mcp.tool(name="list_directory_contents")
 async def list_directory_contents_handler(query: ListDirectoryInput):
     """Used to get the directories and files inside a directory"""
     if not query.directory:
@@ -88,7 +88,7 @@ async def list_directory_contents_handler(query: ListDirectoryInput):
     )
     return validate_data.model_dump_json(exclude={"error"})
 
-@mcp.tool()
+@mcp.tool(name="change_directory")
 async def resolve_and_validate_path_handler(query: ChangeDirectoryInput):
     """Used to validate and resolve a target directory for change_directory action."""
     logger.info(f"Executing Tool: change_directory for: '{query.path}'")
@@ -108,7 +108,7 @@ async def resolve_and_validate_path_handler(query: ChangeDirectoryInput):
     else:
         return f"Directory changed. Current location is now: {validated_output.current_directory}"
 
-@mcp.tool()
+@mcp.tool(name="get_current_directory")
 async def get_current_directory_handler(query: GetDirectoryInput):
     """Get the active current working directory path of this session (pwd)."""
     sys.stderr.write(f"\n[Executing Tool: current_directory to get the current path] '\n")
@@ -118,7 +118,7 @@ async def get_current_directory_handler(query: GetDirectoryInput):
     validated_output = GetDirectoryOutput(**raw_data)
     return validated_output.current_directory
 
-@mcp.tool()
+@mcp.tool(name="read_local_file")
 async def read_local_file_handler(query: ReadFileInput):
     """To Read the files"""
     logger.info(f"Executing Tool: read_local_files to read the file at '{query.file_path}'")
@@ -134,14 +134,14 @@ async def read_local_file_handler(query: ReadFileInput):
     else:
         return validated_data.content
 
-@mcp.tool()
+@mcp.tool(name="web_search")
 async def web_search_handler(query: WebSearchInput):
     """Queries the internet search engine and returns search results."""
     logger.info(f"Executing Tool: web_search for query: '{query.query}'")
     max_results = query.max_results if query.max_results is not None else 10
     return await search_web(query.query, max_results)
 
-@mcp.tool()
+@mcp.tool(name="write_local_file")
 async def write_local_file_handler(query: WriteFileInput):
     """Writes or creates text content into a local file."""
     logger.info(f"Executing Tool: write_local_file for path: '{query.file_path}'")
@@ -153,7 +153,7 @@ async def write_local_file_handler(query: WriteFileInput):
     except Exception as e:
         return f"Error writing file: {str(e)}"
 
-@mcp.tool()
+@mcp.tool(name="get_system_info")
 async def get_system_info_handler(query: SystemInfoInput):
     """Queries OS details, CPU count, RAM metrics, and system uptime details."""
     logger.info("Executing Tool: get_system_info")

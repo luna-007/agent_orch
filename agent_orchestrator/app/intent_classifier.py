@@ -26,12 +26,12 @@ Available Workflows:
 
 User Request: "{query}"
 
-If the request matches the intent or keywords of one of the workflows, select it.
-Otherwise, choose "sysadmin_flow" as the default.
+If the request matches the intent or keywords of one of the workflows (e.g. system inquiry, checking filesystem, file listing, code refactoring, or file modifications), select that workflow.
+If the request is a general conversational query, greeting, follow-up explanation, question about your capabilities/tools, or simple chat (e.g. "hello", "who are you?", "what are your tools?", "explain this", "can you tell me a joke?"), you MUST return "none" to indicate general conversation.
 
 You MUST respond STRICTLY in JSON format:
 {{
-  "workflow": "<name of selected workflow>"
+  "workflow": "<name of selected workflow or 'none'>"
 }}
 """
         messages = [Message(role="user", content=prompt)]
@@ -42,19 +42,19 @@ You MUST respond STRICTLY in JSON format:
             
             # 3-tier parsing
             decision = self._parse_json(content)
-            selected = decision.get("workflow", "sysadmin_flow")
+            selected = decision.get("workflow", "none")
             
-            # Validate it's one of the workflows
-            valid_names = [w["name"] for w in workflows]
+            # Validate it's one of the workflows or "none"
+            valid_names = [w["name"] for w in workflows] + ["none"]
             if selected in valid_names:
                 logger.info(f"Classified query '{query[:40]}...' -> workflow '{selected}'")
                 return selected
             
         except Exception as e:
-            logger.error(f"Intent classification failed: {e}. Defaulting to sysadmin_flow.")
+            logger.error(f"Intent classification failed: {e}. Defaulting to none.")
             
-        logger.info(f"Defaulting query '{query[:40]}...' -> workflow 'sysadmin_flow'")
-        return "sysadmin_flow"
+        logger.info(f"Defaulting query '{query[:40]}...' -> workflow 'none'")
+        return "none"
 
     def _parse_json(self, text: str) -> dict:
         clean_text = text.strip()

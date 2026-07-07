@@ -50,6 +50,9 @@ async def search_web(query: str, max_results: int = 5) -> list[dict]:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, follow_redirects=True, timeout=10.0)
+            if response.status_code != 200:
+                logger.warning(f"DuckDuckGo search returned non-200 status: {response.status_code}")
+                return [{"error": f"DuckDuckGo returned HTTP {response.status_code}. You are being rate-limited. DO NOT retry searching immediately. Answer using your existing knowledge or inform the user."}]
             response.raise_for_status()
             
         soup = BeautifulSoup(response.text, "html.parser")
@@ -74,6 +77,11 @@ async def search_web(query: str, max_results: int = 5) -> list[dict]:
                     "url": actual_url,
                     "snippet": snippet
                 })
+        
+        if not results:
+            logger.warning("DuckDuckGo search returned 0 results. Might be blocking/rate-limiting.")
+            return [{"error": "DuckDuckGo returned empty results. You are likely being rate-limited or blocked. DO NOT retry searching immediately."}]
+            
         return results
     except Exception as e:
         logger.error(f"Error performing search for query '{query}': {e}")

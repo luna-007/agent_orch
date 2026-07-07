@@ -4,13 +4,40 @@ from schemas.llm_schema import LLMResponse, LLMClient, ToolCall
 from config import settings
 import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger("agent_orch.ollama_client")
 
 class OllamaClient(LLMClient):
     
     async def chat(self, messages: list[Message], tools: list[dict] | None = None) -> LLMResponse:
+        formatted_messages = []
+        for msg in messages:
+            msg_dict = {
+                "role": msg.role,
+                "content": msg.content
+            }
+            if msg.role == "tool":
+                msg_dict["name"] = msg.tool_name or ""
+            elif msg.role == "assistant" and msg.tool_calls:
+                ollama_tool_calls = []
+                for tc in msg.tool_calls:
+                    tc_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                    tc_args = tc.get("arguments") if isinstance(tc, dict) else getattr(tc, "arguments", {})
+                    ollama_tool_calls.append({
+                        "type": "function",
+                        "function": {
+                            "name": tc_name,
+                            "arguments": tc_args
+                        }
+                    })
+                msg_dict["tool_calls"] = ollama_tool_calls
+            formatted_messages.append(msg_dict)
+
         payload = {
             "model": settings.OLLAMA_MODEL,
-            "messages": [msg.model_dump() for msg in messages],
+            "messages": formatted_messages,
+            "options": {
+                "temperature": 0.0
+            },
             "think": False,
             "stream": False
         }
@@ -30,12 +57,17 @@ class OllamaClient(LLMClient):
         if response.status_code != 200:
             import sys
             sys.stderr.write(f"\n[Ollama API Error {response.status_code}]: {response.text}\n")
-            return LLMResponse(content=f"Ollama Error: {response.text}", tool_calls=None)
+            raise RuntimeError(f"Ollama API returned status {response.status_code}: {response.text}")
 
         response_data = response.json()
         message_data = response_data.get("message", {})
         content = message_data.get("content", "")
         raw_tool_calls = message_data.get("tool_calls", [])
+        
+        logger.debug(f"Ollama payload tools count: {len(tools) if tools else 0}")
+        logger.debug(f"Ollama response tool_calls: {raw_tool_calls}")
+        if tools and not raw_tool_calls:
+            logger.warning(f"LLM did not invoke any tools despite {len(tools)} tools being available.")
         
         tool_call_list = []
         for raw_tool_call in raw_tool_calls:

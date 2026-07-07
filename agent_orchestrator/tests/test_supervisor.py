@@ -25,28 +25,22 @@ class FakeLLMClient(LLMClient):
 @pytest.mark.asyncio
 async def test_supervisor_workflow_success():
     # Setup LLM responses in order:
-    # 1. Router decide (starts NEW)
+    # 1. Router decide via LLM (no prior context, starts NEW)
     # 2. Researcher agent ReAct execution (final JSON output)
-    # 3. Router decide (moves to RESEARCH_DONE)
-    # 4. SysAdmin agent ReAct execution (final JSON output)
-    # 5. Router decide (moves to SYS_ADMIN_DONE)
-    # 6. Summarizer agent execution (final JSON output)
-    # 7. Router decide (moves to SUMMARIZED)
+    # -- Router fast-path: uses agent's RESEARCH_DONE state directly, no LLM call --
+    # 3. SysAdmin agent ReAct execution (final JSON output)
+    # -- Router fast-path: uses agent's SYS_ADMIN_DONE state directly, no LLM call --
+    # 4. Summarizer agent execution (final JSON output)
+    # -- Router fast-path: uses agent's SUMMARIZED state directly -> FINISH --
     llm_responses = [
-        # 1. Router decide (state NEW)
+        # 1. Router decide (state NEW) — only LLM router call (no prior context)
         '{"current_state": "NEW", "reason": "Beginning workflow"}',
         # 2. Researcher agent
         '{"status": "success", "summary": "Time is 10:00 AM", "state": "RESEARCH_DONE", "reason": "Research complete", "tools_called": []}',
-        # 3. Router decide (state RESEARCH_DONE)
-        '{"current_state": "RESEARCH_DONE", "reason": "Researcher finished"}',
-        # 4. SysAdmin agent
+        # 3. SysAdmin agent
         '{"status": "success", "summary": "Disk space is 50%", "state": "SYS_ADMIN_DONE", "reason": "Checked systems", "tools_called": []}',
-        # 5. Router decide (state SYS_ADMIN_DONE)
-        '{"current_state": "SYS_ADMIN_DONE", "reason": "SysAdmin finished"}',
-        # 6. Summarizer agent
-        '{"status": "success", "summary": "Summary: Time is 10AM, Disk space is 50%", "state": "SUMMARIZED", "reason": "Compiled report", "tools_called": []}',
-        # 7. Router decide (state SUMMARIZED)
-        '{"current_state": "SUMMARIZED", "reason": "Workflow completed"}'
+        # 4. Summarizer agent
+        '{"status": "success", "summary": "Summary: Time is 10AM, Disk space is 50%", "state": "SUMMARIZED", "reason": "Compiled report", "tools_called": []}'
     ]
     
     llm = FakeLLMClient(llm_responses)

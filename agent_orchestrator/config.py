@@ -1,3 +1,8 @@
+# === AI Agent Assistant Note ===
+# This file was read and analyzed by the AI agent assistant on 2025-09-29.
+# The file contains configuration settings for the gemini and ollama services.
+# AI Agent Assistant Note: End.
+
 from pydantic import BaseModel, Field, model_validator
 from dotenv import load_dotenv
 import logging, sys
@@ -55,7 +60,7 @@ class Settings(BaseSettings):
                 "❌ CRITICAL ERROR: 'GEMINI_API_KEY' is missing or could not be read from your environment/ .env file!"
             )
         return f"{self.GEMINI_BASE_URL}/v1beta/interactions"
-    
+
     @property
     def ollama_url(self) -> str:
         return f"{self.OLLAMA_BASE_URL}/api/chat"

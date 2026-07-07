@@ -66,10 +66,6 @@ async def test_workflow_builder_validation_and_building():
         builder = WorkflowBuilder(temp_dir, orchestrator)
         assert "test_flow" in builder.get_workflow_names()
         
-        # Test intent/alias resolution
-        assert builder.resolve_workflow_by_intent_or_alias("I want to run a dummy check") == "test_flow"
-        assert builder.resolve_workflow_by_intent_or_alias("Unrelated query") == "sysadmin_flow"
-        
         # Test supervisor building
         supervisor = builder.build_supervisor("test_flow")
         assert "test_agent" in supervisor.agents
@@ -109,4 +105,4 @@ async def test_intent_classifier():
     llm_garbage = FakeLLMClient('not valid json')
     classifier_garbage = IntentClassifier(llm_garbage)
     selected_fallback = await classifier_garbage.classify("Please run tests", metadata_list)
-    assert selected_fallback == "sysadmin_flow"
+    assert selected_fallback == "none"

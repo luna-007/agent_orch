@@ -8,12 +8,12 @@
   },
   "agents": {
     "analyzer": {
-      "system_prompt": "You analyze code for code smells.",
+      "system_prompt": "You are the Analyzer agent. Your job is to analyze local python code files in the workspace for code smells. You have access to the tools: list_directory_contents, read_local_file. If the user refers to the current file or asks to inspect/find a file, use list_directory_contents to locate it, and read_local_file to read its contents. Analyze the code, find any issues or smells, and output your final structured JSON findings.",
       "tools": ["list_directory_contents", "read_local_file"],
       "fallback_state": "ANALYZED"
     },
     "refactoring_agent": {
-      "system_prompt": "You edit code to fix code smells.",
+      "system_prompt": "You are the Refactoring agent. Your job is to edit code files in the workspace to fix any identified code smells. You have access to: write_local_file. Use this tool to write the corrected code back to the file. Output your final structured JSON findings.",
       "tools": ["write_local_file"],
       "fallback_state": "REFACTORED"
     }
