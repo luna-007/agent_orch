@@ -11,9 +11,14 @@ class OllamaClient(LLMClient):
     async def chat(self, messages: list[Message], tools: list[dict] | None = None) -> LLMResponse:
         formatted_messages = []
         for msg in messages:
+            content = msg.content or ""
+            # Escape XML special characters to prevent Ollama template/parser failures on raw text
+            if content:
+                content = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                
             msg_dict = {
                 "role": msg.role,
-                "content": msg.content
+                "content": content
             }
             if msg.role == "tool":
                 msg_dict["name"] = msg.tool_name or ""
@@ -36,7 +41,9 @@ class OllamaClient(LLMClient):
             "model": settings.OLLAMA_MODEL,
             "messages": formatted_messages,
             "options": {
-                "temperature": 0.0
+                "temperature": 0.0,
+                "num_ctx": 16384,
+                "num_predict": 2048
             },
             "think": False,
             "stream": False
